@@ -35,7 +35,8 @@ public static class OcrOverlayRenderer
                 Color.FromArgb(235, 14, 14, 16), displayText, Colors.White, Centered: true);
         }
 
-        var bg = SampleAverage(frame, line.X, line.Y, line.Width, line.Height);
+        // 背景采样:取 bbox 外围一圈(文本附近的背景),不混入字形像素,颜色更贴近真实背景、更柔和
+        var bg = SampleSurrounding(frame, line.X, line.Y, line.Width, line.Height, ring: 8);
         var fg = ContrastColor(bg);
         return new OverlayItem(
             line.X - padding, line.Y - padding,
@@ -78,6 +79,44 @@ public static class OcrOverlayRenderer
             }
         }
         if (n == 0) return Colors.White;
+        return Color.FromArgb(255, (byte)(r / n), (byte)(g / n), (byte)(b / n));
+    }
+
+    /// <summary>
+    /// 采样 bbox 外围一圈环形区域(ring 像素宽)的平均色:取"文本附近的背景",
+    /// 不含 bbox 内部的字形像素(白底黑字取内部平均会偏灰)。环形落在屏幕外时回退内部平均。
+    /// </summary>
+    private static Color SampleSurrounding(PixelFrame f, double x, double y, double w, double h, int ring)
+    {
+        long r = 0, g = 0, b = 0;
+        var n = 0;
+
+        void Accumulate(int x0, int y0, int x1, int y1)
+        {
+            x0 = Math.Max(0, x0); y0 = Math.Max(0, y0);
+            x1 = Math.Min(f.Width, x1); y1 = Math.Min(f.Height, y1);
+            for (var yy = y0; yy < y1; yy += 2)
+            {
+                var row = yy * f.Width * 4;
+                for (var xx = x0; xx < x1; xx += 2)
+                {
+                    var i = row + xx * 4;
+                    b += f.Pixels[i];
+                    g += f.Pixels[i + 1];
+                    r += f.Pixels[i + 2];
+                    n++;
+                }
+            }
+        }
+
+        var ix0 = (int)x; var iy0 = (int)y;
+        var ix1 = (int)Math.Ceiling(x + w); var iy1 = (int)Math.Ceiling(y + h);
+        Accumulate(ix0 - ring, iy0 - ring, ix1 + ring, iy0);       // 上
+        Accumulate(ix0 - ring, iy1, ix1 + ring, iy1 + ring);       // 下
+        Accumulate(ix0 - ring, iy0, ix0, iy1);                     // 左
+        Accumulate(ix1, iy0, ix1 + ring, iy1);                     // 右
+
+        if (n == 0) return SampleAverage(f, x, y, w, h);
         return Color.FromArgb(255, (byte)(r / n), (byte)(g / n), (byte)(b / n));
     }
 

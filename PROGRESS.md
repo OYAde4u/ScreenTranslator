@@ -1,6 +1,33 @@
 # ScreenTranslator 开发进度记录
 
-更新:2026-08-24(第 7 轮:按 REVIEW.md 修复翻译链路 P0/P1,演示页中文译文覆盖验证通过)
+更新:2026-08-25(第 11 轮:Edge 免鉴权新端点修复"长篇英文誊写原文";渲染方式切换即时生效)
+
+## 第 11 轮改动(翻译"誊写"根因修复 + 渲染切换刷新)
+1. **Edge 翻译接口重写(根因)**:旧流程的 JWT 鉴权端点 `edge.microsoft.com/translate/auth` 已被上游移除(2026-07,实测 404)——Edge 整体熔断,长段落落到 MyMemory 超长度限制后回退原文,表现为"大部分行直接誊写英文"。改用免鉴权后继端点 `edge.microsoft.com/translate/translatetext`(参考 read-frog 迁移):body 为纯 JSON 字符串数组、必须带浏览器 UA(否则 400 Client Browser Version not supported)、入参 HTML 转义防 `<` 被粘成伪标签、出参解码一次。实测:5 行段落译文保留 4 个换行、质量上乘("Privet Drive"→"女贞路四号");
+2. **段落拆回失配兜底**:译文行数 ≠ 段落行数时不再整段回退原文,改为**逐行重试**(走管道行级缓存),仍失败的行保留原文且不渲染覆盖块;`MaxLinesPerParagraph` 8→6(单请求更短更稳);
+3. **誊写行不画块**:渲染前逐行跳过"译文==原文"的行(失败行不再用黑块盖原文),部分失败时状态栏提示未翻出行数;
+4. **切换渲染方式底色不刷新 bug**:`OverlayWindow` 内容签名原来只含坐标+文本,换"背景采样"后文本/位置不变 → 签名不变 → 跳过重建 → 永远显示旧色块。签名加入 `Bg`/`Fg` 颜色;
+5. 验证:Edge 实测(2 段落 + 转义往返)通过;translate/filter/e2e/ocr-hybrid/diff 自检 exit=0。
+
+## 第 10 轮改动(实机反馈修复)
+1. **覆盖层被后弹出的 Topmost 窗口压住**(演示页英文上看不到译文块):`OverlayWindow.BringToFront()`(`SetWindowPos(HWND_TOPMOST, NOMOVE|NOSIZE|NOACTIVATE)`),`OverlayManager.SetItems`/`ShowAll` 每次渲染后重新断言置顶;
+2. **长行被横向切断**(满屏英文只翻右半段,如 `and up the road, he wa` 碎片):`BuildOcrRegions` 从"脏区 bounding box 裁剪"改为**全宽横带**(x=0、宽=整屏,只裁垂直方向,margin 32px)——文本行是水平的,横带永不横向切行;带高>半屏仍退回全屏;RapidOCR 有 MaxSideLen=2000 硬上限 + 宽高比 8 信箱化,横带耗时按高度比例缩放,不会炸性能;
+3. **背景取色更柔和**:`SampleAverage`(取 bbox 内部,混入字形像素偏灰)→ `SampleSurrounding`(取 bbox 外围 8px 环形带,纯背景像素,步长 2;环形全落屏幕外时回退内部平均),仅影响"背景采样"渲染方式;
+4. 回归:e2e / filter / ocr-hybrid / diff 自检 exit=0。
+
+## 第 9 轮改动(RapidOCR 高质量主引擎)
+1. **接入 RapidOcrNet 4.0.2**(ONNX,PP-OCRv5/v6 模型,无 PaddleOCRSharp 社区版 `box sizes <100` 限制):新增依赖 RapidOcrNet + Microsoft.ML.OnnxRuntime 1.29 + SkiaSharp 3.119(win-x64 native 自动拷贝);新增 `Services/Ocr/RapidOcrEngine.cs`(BGRA 零拷贝喂 SKBitmap、`RapidOcrOptions.PPOCRv6` 预设、逐字符置信度取均值、四角点→bbox、模型懒加载在后台线程、绝对路径解析防 cwd 不一致);
+2. **内置 PP-OCRv6 small 多语模型**(`ScreenTranslator/models/v6/`,det 9.9MB + rec 21MB + dict,SHA256 校验通过;来源 RapidAI/modelscope):Latin + CJK(含假名),中英日一模型覆盖;参考 DangoTranslator 的本地多语 PP-OCR 模型组织方式;
+3. **实测对比**(`--selftest-ocr-rapid*`):合成图 3/3 全对(0.987~1.000,含中文 `屏幕翻译测试` 无空格无错字);真实整屏 2560x1600 识别 116 行、中文无错字(对照 Windows 同屏 `HeIlo`/中文逐字插空格);整屏 ~2~4s(含首次模型加载 1~2s);
+4. **主引擎切换**:`HybridOcrEngine` 改为 RapidOCR 全区域优先 + Windows 兜底(`RapidOcrEngine.LastCallFailed` 区分"识别失败"与"确实无文字");PaddleOCRSharp 仅保留 `--selftest-ocr-paddle*` 诊断;
+5. **自检**:新增 `--selftest-ocr-rapid` / `--selftest-ocr-rapid-screen`;全套 7 项(ocr/hybrid/rapid/filter/e2e/translate/diff)exit=0。
+
+## 第 8 轮改动(OCR 识图质量优化)
+1. **新增 `HybridOcrEngine`**(`Services/Ocr/HybridOcrEngine.cs`):按输入规模分流——面积 ≤1.8MP 且最长边 ≤2000 的区域优先 PaddleOCR(PP-OCRv5,真实置信度、错字少);整屏/超限或 Paddle 触发社区版 "box sizes <100" 限制(返回 0 行)时自动回退 Windows.Media.Ocr;Paddle 首次加载放后台线程,不卡 UI;
+2. **依据(实测)**:合成图 Paddle 3/3 行全对(`Hello ScreenTranslator 12345`、`屏幕翻译测试 ABCDEFG`,置信度 0.95~0.995),Windows 同图把 `Hello` 识成 `HeIlo`;真实屏幕 2000x1000 裁剪 Paddle 83 行可用,2560x1600 整屏触发社区版限制返回 0 行;
+3. **过滤修复**:`IsPathLike` 不再按"含冒号"一刀切(误杀 `NPC: ...` 对话),只过滤协议 `://`、`C:\` 盘符与多斜杠路径;纯时间仍由纯数字规则过滤;
+4. **自检**:新增 `--selftest-ocr-hybrid`(合成小图应路由 Paddle)、`--selftest-ocr-paddle-screen`(全屏+多尺寸裁剪摸清社区版限制);`--selftest-filter` 扩充对话/盘符用例;构建 0 错误,ocr/hybrid/filter/e2e 自检 exit=0;
+5. **主引擎切换**:`MainWindow` 默认使用 `HybridOcrEngine` 并正确 Dispose。
 
 ## 第 7 轮改动(REVIEW.md 修复路线图 1/2/4/5/6/7/8 项)
 1. **段落聚合 + 整段翻译**(P0-1):新增 `LineGrouping`——OCR 行按几何关系(垂直间距<1.5×行高且水平重叠>30%)聚合成段落,行间 `\n` 连接一次翻译请求,译文按行拆回(行数不匹配回退原文);一句话被拆成多行时上下文连贯;
@@ -46,7 +73,7 @@
 - **背景采样覆盖**:采样原文背景色填充 + 黑/白对比字,纯色背景时像原文原位替换;
 - UI 下拉框切换(`渲染方式`),即时生效,下次触发应用。
 
-## 项目状态:✅ 可运行,主引擎 = Windows.Media.Ocr(系统自带,无社区版限制;Paddle 因框大小限制不再作主引擎)
+## 项目状态:✅ 可运行,主引擎 = RapidOCR(PP-OCRv6 small 多语,整屏高质量)+ Windows.Media.Ocr 兜底(HybridOcrEngine 调度)
 - 源码:`D:\ScreenTranslator\ScreenTranslator\`(WPF,.NET 8 `net8.0-windows10.0.19041.0`)
 - 构建:`pwsh -c "& 'D:\ScreenTranslator\dot.ps1' build"`(workdir = 项目目录;沙箱内脚本调用受限时改用内联环境变量执行 dotnet build)
 - 输出:`bin\Debug\net8.0-windows10.0.19041.0\ScreenTranslator.exe`(注意 TFM 全名目录)
@@ -60,11 +87,12 @@
 - **M5 打磨**:OcrLineFilter(长度/置信度/目标语言 CJK/忽略区域)、翻译接入主流程、目标语言选择(中/英/日)、文字字号自适应 bbox、全局异常落盘 crash.txt
 
 ## 自检命令(全部 exit=0)
-`--diag`、`--selftest`、`--selftest-ocr`(系统 OCR)、`--selftest-ocr-paddle`(PP-OCRv5)、`--selftest-translate`、`--selftest-diff`、`--selftest-e2e`、`--probe-api`(Paddle API 反射)
+`--diag`、`--selftest`、`--selftest-ocr`(系统 OCR)、`--selftest-ocr-hybrid`(主路径=RapidOCR)、`--selftest-ocr-rapid` / `--selftest-ocr-rapid-screen`(PP-OCRv6 合成/整屏)、`--selftest-ocr-paddle` / `--selftest-ocr-paddle-screen`(Paddle 诊断)、`--selftest-translate`、`--selftest-diff`、`--selftest-e2e`、`--selftest-filter`
 
 ## 已装 NuGet 包(缓存,勿删)
 - Microsoft.Windows.SDK.NET.Ref 10.0.19041.56(WinRT 投影)
 - PaddleOCRSharp 6.2.0 + Paddle.Runtime.win_x64 3.3.0.1 + System.Drawing.Common 8.0.7 + Microsoft.Win32.SystemEvents 8.0.0 + Newtonsoft.Json 13.0.3
+- RapidOcrNet 4.0.2 + Microsoft.ML.OnnxRuntime(.Managed) 1.29.0 + SkiaSharp 3.119.1 + Clipper2 2.0.0(win-x64 native 随包自动拷贝;PP-OCRv6 模型在 `ScreenTranslator/models/v6/`,勿删)
 - 注意:Paddle.Runtime 的 build 资产解析为空,**native 拷贝已固化在 csproj**(绝对路径 None Include)
 
 ## 待办/已知限制

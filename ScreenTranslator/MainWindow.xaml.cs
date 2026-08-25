@@ -44,9 +44,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        // 主引擎:Windows.Media.Ocr(系统自带、零依赖、无限制)。
-        // 注:PaddleOCRSharp 社区版限制"检测框 <100px",全屏截图里正常文本行(>100px)直接抛异常导致整体失败,故不再作为主引擎。
-        _ocr = new WindowsOcrEngine();
+        // 主引擎:HybridOcrEngine——全部区域优先 RapidOCR(PP-OCRv6 small 多语,ONNX,无社区版框大小限制,整屏高质量);
+        // 模型缺失/识别异常时自动回退 Windows.Media.Ocr(系统自带、整屏稳定兜底)。
+        _ocr = new HybridOcrEngine();
         Diag.Dump($"engine: {_ocr.GetType().Name} available={_ocr.IsAvailable}");
         // 翻译链:DeepLX(高质量,需自部署)→ Edge(免费批量,国内直连)→ MyMemory(质量一般)→ Echo(原样兜底)
         _pipeline = new TranslationPipeline(new DeepLXTranslator(), new EdgeTranslator(),
@@ -69,6 +69,7 @@ public partial class MainWindow : Window
             _hotkey.Dispose();
             _autoTrigger?.Dispose();
             _overlay.Dispose();
+            (_ocr as IDisposable)?.Dispose();
         };
     }
 
@@ -194,17 +195,22 @@ public partial class MainWindow : Window
             Diag.Dump($"translated={translated.Count}: {string.Join(" | ", translated.Take(25))}");
 
             // 4) 后台:生成覆盖图元(字幕底块/背景采样;CPU 密集,不占 UI 线程)
-            // Echo 兜底(译文全部 == 原文):不画块——用原文覆盖原文没有意义,改状态栏提示
-            var allSame = translated.Select((t, i) => t == filtered[i].Text).All(x => x);
-            if (allSame)
+            // 逐行跳过"译文 == 原文"的行(引擎失败的行保留原文):用原文覆盖原文没有意义,
+            // 只给真正翻出来的行画块;全部未翻出时状态栏提示,不画任何块。
+            var pairs = filtered.Zip(translated)
+                .Where(p => !string.Equals(p.Second, p.First.Text, StringComparison.Ordinal))
+                .ToList();
+            if (pairs.Count == 0)
             {
                 _overlay.Clear();
                 Log("翻译服务不可用(DeepLX/Edge/MyMemory 均失败),未覆盖原文——请检查网络后重试");
                 return;
             }
+            if (pairs.Count < filtered.Count)
+                Log($"提示:{filtered.Count - pairs.Count} 行未翻出(保留原文不覆盖)");
 
             var items = await Task.Run(() =>
-                filtered.Zip(translated)
+                pairs
                     .Select(p => OcrOverlayRenderer.BuildOne(frame, p.First, p.Second, _renderStyle))
                     .ToList());
 
@@ -281,8 +287,12 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    // 引擎对换行处理不一致:回退原文,保证行数对齐
-                    foreach (var l in para.Lines) result[l] = l.Text;
+                    // 译文行数不匹配(引擎偶发丢/并换行):逐行重试(走管道行级缓存),仍失败的行保留原文、不渲染
+                    Diag.Dump($"paragraph split mismatch: lines={para.Lines.Count} parts={parts.Length}, per-line retry");
+                    var lineTexts = para.Lines.Select(l => l.Text).ToList();
+                    var lineTr = await _pipeline.TranslateAsync(lineTexts, from, _targetLang);
+                    for (var i = 0; i < para.Lines.Count; i++)
+                        result[para.Lines[i]] = (lineTr[i] ?? para.Lines[i].Text).Trim();
                 }
             }
         }
@@ -290,7 +300,13 @@ public partial class MainWindow : Window
         return filtered.Select(l => result.TryGetValue(l, out var t) ? t : l.Text).ToList();
     }
 
-    /// <summary>由脏区构造 OCR 区域:丢弃应用窗口引起的脏区;小变化并成一块带边距的裁剪区;大面积才全屏。</summary>
+    /// <summary>
+    /// 由脏区构造 OCR 区域:丢弃应用窗口引起的脏区;小变化合并为一条"全宽横带"(x=0,宽=整屏,只裁垂直方向)。
+    /// 为什么全宽:文本行是水平的,bounding-box 裁剪会把长行横向切成碎片(如 "and up the road, he wa"),
+    /// 碎片翻译破碎、覆盖块只盖住半行;全宽横带保证不横向切断任何一行,纵向切边由 margin 保护。
+    /// 成本可控:RapidOCR 检测有 MaxSideLen=2000 硬上限 + 宽高比 8 信箱化,横带耗时按高度比例缩放。
+    /// 带高超过半屏时退回全屏。
+    /// </summary>
     private static List<(int X, int Y, int W, int H)> BuildOcrRegions(
         List<(int X, int Y, int W, int H)> dirty, Rect appRect, int fw, int fh, out bool full)
     {
@@ -303,17 +319,15 @@ public partial class MainWindow : Window
         // 兜底:全部被过滤时(理论上不应发生)退回全屏,保证 OCR 一定会执行
         if (relevant.Count == 0) return new List<(int, int, int, int)> { (0, 0, fw, fh) };
 
-        const int margin = 12;
-        var x0 = Math.Max(0, relevant.Min(r => r.X) - margin);
+        const int margin = 32; // 纵向边距:保护带顶/带底的完整文本行(常见行高 ≤32px)
         var y0 = Math.Max(0, relevant.Min(r => r.Y) - margin);
-        var x1 = Math.Min(fw, relevant.Max(r => r.X + r.W) + margin);
         var y1 = Math.Min(fh, relevant.Max(r => r.Y + r.H) + margin);
-        if ((x1 - x0) * (long)(y1 - y0) > fw * (long)fh / 2)
+        if ((long)fw * (y1 - y0) > fw * (long)fh / 2)
         {
             full = true;
             return new List<(int, int, int, int)> { (0, 0, fw, fh) };
         }
-        return new List<(int, int, int, int)> { (x0, y0, x1 - x0, y1 - y0) };
+        return new List<(int, int, int, int)> { (0, y0, fw, y1 - y0) };
     }
 
     /// <summary>脏区与矩形交集面积占脏区面积的比例(0~1)。</summary>

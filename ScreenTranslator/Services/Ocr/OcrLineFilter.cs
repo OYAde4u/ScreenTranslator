@@ -68,13 +68,13 @@ public static class OcrLineFilter
         return text.Any(char.IsDigit) && text.Any(char.IsLetter);
     }
 
-    /// <summary>URL/文件路径/含冒号文本(时间/盘符)——翻译无意义。</summary>
+    /// <summary>URL/文件路径——翻译无意义。注意:不再按"含冒号"一刀切(会误杀 "NPC: ..." 这类对话);只过滤协议://、盘符路径与多斜杠路径。</summary>
     public static bool IsPathLike(string text)
     {
-        if (text.Contains("://")) return true;
+        if (text.Contains("://")) return true;                       // http:// 等协议
+        if (text.Length >= 3 && char.IsLetter(text[0]) && text[1] == ':' && (text[2] is '\\' or '/')) return true; // C:\ 盘符
         var slashes = text.Count(c => c is '/' or '\\');
         if (slashes >= 2) return true;
-        if (text.Contains(':')) return true;
         return false;
     }
 

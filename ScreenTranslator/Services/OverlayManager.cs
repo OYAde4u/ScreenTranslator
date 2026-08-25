@@ -68,6 +68,8 @@ public sealed class OverlayManager : IDisposable
         {
             var mine = filtered.Where(i => MonitorContains(win.Monitor, i)).ToList();
             win.SetItems(mine);
+            // 渲染后重新断言置顶:后弹出的 Topmost 窗口(演示页/游戏等)会压过覆盖层
+            win.BringToFront();
         }
     }
 
@@ -88,7 +90,11 @@ public sealed class OverlayManager : IDisposable
     public void ShowAll()
     {
         if (!HasItems) return;
-        foreach (var w in _windows) w.Visibility = Visibility.Visible;
+        foreach (var w in _windows)
+        {
+            w.Visibility = Visibility.Visible;
+            w.BringToFront();
+        }
     }
 
     /// <summary>图元面积 70% 以上落在 app 窗口内才排除(与 OcrLineFilter 的忽略规则一致,不误杀重叠内容)。</summary>

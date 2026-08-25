@@ -21,8 +21,8 @@ public static class LineGrouping
     private const double MinGap = 24;
     private const double OverlapRatio = 0.3;
 
-    /// <summary>行数上限:超过的段落按行数切成多段,避免单次请求过大。</summary>
-    public const int MaxLinesPerParagraph = 8;
+    /// <summary>行数上限:超过的段落按行数切成多段(单次请求更短,降低超长请求失败/换行丢失概率)。</summary>
+    public const int MaxLinesPerParagraph = 6;
 
     /// <summary>把 OCR 行聚合成段落(按 y 排序,自上而下扫描)。</summary>
     public static List<Paragraph> Group(IReadOnlyList<OcrLine> lines)

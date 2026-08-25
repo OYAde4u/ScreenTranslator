@@ -47,6 +47,15 @@ public sealed class OverlayWindow : Window
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
+
+    private static readonly IntPtr HwndTopmost = new(-1);
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoActivate = 0x0010;
+
     private readonly Canvas _canvas = new();
     private ScreenMonitor _monitor;
     private IntPtr _hwnd;
@@ -96,6 +105,16 @@ public sealed class OverlayWindow : Window
         ApplyRegion(Array.Empty<(int X, int Y, int W, int H)>());
     }
 
+    /// <summary>
+    /// 重新断言置顶:其他 Topmost 窗口(演示页/游戏/全屏视频)后显示会压过覆盖层,
+    /// 每次渲染后调用本方法把覆盖层抢回 z-order 最顶(NOMOVE/NOSIZE/NOACTIVATE,无副作用)。
+    /// </summary>
+    public void BringToFront()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+        SetWindowPos(_hwnd, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+    }
+
     public void ClearItems()
     {
         _canvas.Children.Clear();
@@ -109,9 +128,10 @@ public sealed class OverlayWindow : Window
     /// </summary>
     public void SetItems(IReadOnlyList<OcrOverlayRenderer.OverlayItem> items)
     {
-        // 坐标量化到 4px 网格:OCR 框抖动 1~2px 不应触发整窗重建(闪烁来源)
+        // 坐标量化到 4px 网格:OCR 框抖动 1~2px 不应触发整窗重建(闪烁来源);
+        // 签名必须包含颜色——否则切换渲染方式(字幕底块↔背景采样)后文本/位置没变,旧色块永远不刷新
         var signature = string.Join("|", items.Select(i =>
-            $"{(int)i.X / 4},{(int)i.Y / 4},{(int)i.W / 4},{(int)i.H / 4},{i.Text}"));
+            $"{(int)i.X / 4},{(int)i.Y / 4},{(int)i.W / 4},{(int)i.H / 4},{i.Bg.ToString()},{i.Fg.ToString()},{i.Text}"));
         if (signature == _lastSignature) return;
         _lastSignature = signature;
 

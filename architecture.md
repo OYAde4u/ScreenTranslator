@@ -61,6 +61,10 @@
 
 **降级策略**:默认 PaddleOCR(高精度);若用户开"低延迟模式"或识别延迟超标,切 Windows.Media.Ocr。
 
+> **当前实现(第 9 轮)**:主引擎为 **RapidOCR(RapidOcrNet 4.0.2 + PP-OCRv6 small 多语模型,ONNX)**——无 PaddleOCRSharp 社区版的 `box sizes <100` 整屏限制,实测 2560x1600 整屏识别 116 行、中英混排无错字(合成图置信度 0.987~1.000);模型(det small ~10MB + rec small ~21MB + dict)随项目内置、构建拷贝到 `models/v6/`。`HybridOcrEngine` 负责调度:全部区域优先 RapidOCR,模型缺失/初始化失败/识别异常时自动回退 Windows.Media.Ocr 兜底。PaddleOCRSharp 降级为诊断自检(`--selftest-ocr-paddle*`)不再参与主流程。多语模型思路参考了 DangoTranslator(本地 PP-OCR det/rec/cls 模型按语言组织,含 japan/korean rec);PP-OCRv6 small 单模型已覆盖 Latin + CJK(含假名),韩文如需可再补 korean rec 模型 + dict 做引擎内多模型切换。
+>
+> 历史(第 8 轮):曾落地 Paddle/Windows 按输入规模分流(≤1.8MP 走 Paddle),因社区版整屏限制被 RapidOCR 方案取代。
+
 **反幻觉三板斧**(幻觉=识别出原文里没有的字):
 
 1. 置信度过滤:`Score < 0.6` 的行不显示;

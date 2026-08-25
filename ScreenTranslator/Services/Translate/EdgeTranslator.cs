@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -6,21 +7,24 @@ using System.Text.Json.Serialization;
 namespace ScreenTranslator.Services.Translate;
 
 /// <summary>
-/// Edge/必应翻译免费接口(Edge 浏览器内置翻译所用端点,国内网络可直接访问,无需 key)。
-/// 流程:GET https://edge.microsoft.com/translate/auth 取 JWT → POST cognitive.microsofttranslator.com。
-/// 天然支持批量(一次请求多条文本),与段落聚合翻译配合最好;
-/// 批量失败整批返回 null(由管道行级降级到 MyMemory)。
+/// Edge/微软翻译免费接口 v2(免鉴权):2026-07 上游移除了 token 端点(edge.microsoft.com/translate/auth,404),
+/// 后继端点为 edge.microsoft.com/translate/translatetext(参考 read-frog 的迁移):
+/// - POST body 是纯 JSON 字符串数组(不再是 [{Text}] 形状);
+/// - 必须带浏览器 User-Agent,否则 400 "Client Browser Version not supported";
+/// - 服务端会对文本跑 HTML 标签对齐器:裸 "&lt;" 会被粘成伪标签,入参先 HTML 转义、出参解码一次;
+/// - 天然支持批量(一次请求多条文本),与段落聚合翻译配合最好;实测译文保留 \n 换行;
+/// - 批量失败整批返回 null(由管道行级降级到 MyMemory)。
 /// </summary>
 public sealed class EdgeTranslator : ITranslator
 {
-    private const string AuthUrl = "https://edge.microsoft.com/translate/auth";
     private const string TranslateUrl =
-        "https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0";
+        "https://edge.microsoft.com/translate/translatetext?isEnterpriseClient=false";
+
+    // 无浏览器 UA 时端点返回 400 "Client Browser Version not supported"
+    private const string BrowserUa =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0";
 
     private readonly HttpClient _http;
-    private readonly SemaphoreSlim _tokenGate = new(1, 1);
-    private string? _token;
-    private long _tokenExpireTicks;
     private long _downUntilTicks;
 
     public string Name => "Edge";
@@ -33,6 +37,7 @@ public sealed class EdgeTranslator : ITranslator
         // 国内直连,不走系统代理(代理反而可能把请求挂起)
         var handler = new HttpClientHandler { UseProxy = false };
         _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd(BrowserUa);
     }
 
     public async Task<IReadOnlyList<string?>> TranslateAsync(IReadOnlyList<string> texts, string from, string to,
@@ -59,31 +64,16 @@ public sealed class EdgeTranslator : ITranslator
     {
         try
         {
-            var token = await GetTokenAsync(ct);
-            if (token is null) return false;
-
             var url = TranslateUrl + "&from=" + MapLang(from) + "&to=" + MapLang(to);
-            var body = texts.Skip(start).Take(count).Select(t => new EdgeRequest { Text = t }).ToArray();
+            // 纯字符串数组 + HTML 转义(服务端 HTML 对齐器会把裸 < 粘成伪标签;转义实体可无损往返)
+            var body = texts.Skip(start).Take(count).Select(WebUtility.HtmlEncode).ToArray();
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.Add("Authorization", "Bearer " + token);
-            req.Content = JsonContent.Create(body);
-
-            using var resp = await _http.SendAsync(req, ct);
-            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            using var resp = await _http.PostAsJsonAsync(url, body, ct);
+            if (!resp.IsSuccessStatusCode)
             {
-                // token 提前失效:清缓存重试一次
-                InvalidateToken();
-                token = await GetTokenAsync(ct);
-                if (token is null) return false;
-                using var req2 = new HttpRequestMessage(HttpMethod.Post, url);
-                req2.Headers.Add("Authorization", "Bearer " + token);
-                req2.Content = JsonContent.Create(body);
-                using var resp2 = await _http.SendAsync(req2, ct);
-                if (!resp2.IsSuccessStatusCode) return Trip(ex: null, $"Edge HTTP {(int)resp2.StatusCode}");
-                return await FillAsync(resp2, results, start, ct);
+                var errBody = await resp.Content.ReadAsStringAsync(ct);
+                return Trip(null, $"Edge HTTP {(int)resp.StatusCode} {errBody[..Math.Min(120, errBody.Length)]}");
             }
-            if (!resp.IsSuccessStatusCode) return Trip(ex: null, $"Edge HTTP {(int)resp.StatusCode}");
             return await FillAsync(resp, results, start, ct);
         }
         catch (Exception ex)
@@ -99,8 +89,12 @@ public sealed class EdgeTranslator : ITranslator
         if (arr is null) return Trip(null, "Edge 响应解析失败");
         for (var i = 0; i < arr.Count; i++)
         {
-            var t = arr[i].Translations?.FirstOrDefault()?.Text?.Trim();
-            if (!string.IsNullOrEmpty(t)) results[start + i] = t;
+            var t = arr[i].Translations?.FirstOrDefault()?.Text;
+            if (!string.IsNullOrEmpty(t))
+            {
+                // 入参做过 HTML 转义,回包里的实体解码一次还原
+                results[start + i] = WebUtility.HtmlDecode(t).Trim();
+            }
         }
         Interlocked.Exchange(ref _downUntilTicks, 0);
         return true;
@@ -115,38 +109,6 @@ public sealed class EdgeTranslator : ITranslator
         return false;
     }
 
-    /// <summary>取 JWT(带缓存,提前 60 秒过期;并发去重)。失败返回 null 并打开短熔断。</summary>
-    private async Task<string?> GetTokenAsync(CancellationToken ct)
-    {
-        if (_token is not null && DateTime.UtcNow.Ticks < _tokenExpireTicks) return _token;
-        await _tokenGate.WaitAsync(ct);
-        try
-        {
-            if (_token is not null && DateTime.UtcNow.Ticks < _tokenExpireTicks) return _token;
-            var jwt = await _http.GetStringAsync(AuthUrl, ct);
-            if (string.IsNullOrWhiteSpace(jwt)) { Trip(null, "Edge auth 返回空"); return null; }
-            _token = jwt.Trim();
-            // JWT 有效期 10 分钟,保守按 8 分钟缓存
-            _tokenExpireTicks = DateTime.UtcNow.AddMinutes(8).Ticks;
-            return _token;
-        }
-        catch (Exception ex)
-        {
-            Trip(ex, "Edge auth 失败");
-            return null;
-        }
-        finally
-        {
-            _tokenGate.Release();
-        }
-    }
-
-    private void InvalidateToken()
-    {
-        _token = null;
-        _tokenExpireTicks = 0;
-    }
-
     private static string MapLang(string lang) => lang.ToUpperInvariant() switch
     {
         "ZH" or "ZH-CN" or "ZH-HANS" => "zh-Hans",
@@ -158,11 +120,6 @@ public sealed class EdgeTranslator : ITranslator
         "RU" => "ru",
         _ => lang.ToLowerInvariant(),
     };
-
-    private sealed class EdgeRequest
-    {
-        [JsonPropertyName("Text")] public string Text { get; set; } = "";
-    }
 
     private sealed class EdgeResponse
     {

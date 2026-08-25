@@ -72,8 +72,11 @@ dotnet build ScreenTranslator\ScreenTranslator.csproj
 
 | 引擎 | 说明 | 状态 |
 |---|---|---|
-| **Windows.Media.Ocr** | 系统自带,零依赖、无限制,全屏识别约 0.3 秒 | ✅ 默认主引擎 |
-| **PaddleOCRSharp(PP-OCRv5)** | 识别质量更高,自带四角点坐标;社区版限制检测框 <100px,用于小区域/备选 | 🧪 备用 |
+| **RapidOCR(PP-OCRv6 small 多语,ONNX)** | 整屏/任意区域高质量识别,真实置信度 + 四角点坐标,支持中/英/日(假名);无框大小限制 | ✅ 默认主引擎 |
+| **Windows.Media.Ocr** | 系统自带、零依赖、整屏稳定;小字/中文错字较多,作兜底 | 🛟 兜底(模型缺失/异常时自动切换) |
+| **PaddleOCRSharp(PP-OCRv5)** | 质量高但社区版整屏触发 "box sizes <100" 返回 0 行,仅保留作诊断自检 | 🧪 诊断用 |
+
+> 实测(2560x1600 真实整屏):RapidOCR 识别 116 行、中文无错字;Windows OCR 同屏中文逐字插空格且错字多(如 `HeIlo`、`RO c ksta r`)。PP-OCRv6 模型(~31MB)已内置在 `ScreenTranslator/models/v6/`(SHA256 已校验),构建时自动拷贝到输出目录;首次识别需加载模型(约 1~2 秒,之后常驻)。
 
 ## 🌐 翻译引擎(降级链)
 
@@ -94,7 +97,7 @@ ScreenTranslator/
 │   ├── App.xaml(.cs)              # 程序启动入口
 │   ├── MainWindow.xaml(.cs)       # 主界面 + 总调度(串起整条流水线)
 │   └── Services/
-│       ├── Ocr/                   # 文字识别:引擎抽象 + Windows OCR + PaddleOCR + 过滤
+│       ├── Ocr/                   # 文字识别:引擎抽象 + RapidOCR(主)+ Windows OCR(兜底)+ PaddleOCR(诊断)+ 过滤
 │       ├── Translate/             # 翻译:管道(缓存/并发/降级)+ 4 家引擎 + 段落聚合
 │       ├── ScreenCaptureService.cs # 截屏(逐显示器 BitBlt)
 │       ├── ScreenDiff.cs          # 分块指纹变化检测
@@ -112,7 +115,7 @@ ScreenTranslator/
 
 - **语言/框架**:C# / WPF,.NET 8(`net8.0-windows10.0.19041.0`)
 - **截图**:GDI+ BitBlt(逐显示器,物理像素)
-- **OCR**:Windows.Media.Ocr(主)+ PaddleOCRSharp(备)
+- **OCR**:RapidOcrNet(PP-OCRv6 small 多语 ONNX,主)+ Windows.Media.Ocr(兜底)
 - **渲染**:WPF 透明置顶窗口 + SetWindowRgn 裁剪,双缓冲增量绘制
 - **翻译**:HTTP 客户端调用多家免费服务,信号量限流并发
 
@@ -122,7 +125,7 @@ ScreenTranslator/
 |---|---|
 | 变化检测(分块哈希) | ~5ms |
 | 截屏 | 5~20ms |
-| OCR(仅脏区) | 50~200ms |
+| OCR(RapidOCR,仅脏区) | 小区域 ~0.3~1s;首次调用含模型加载 1~2s;整屏约 2~4s |
 | 过滤 + 缓存命中 | <1ms / 0ms |
 | 翻译(批量 + 并发) | 100~500ms,缓存命中 0ms |
 | 覆盖绘制(增量) | 5~20ms |

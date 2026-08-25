@@ -30,6 +30,10 @@ public static class SelfTests
             case "--selftest-translate": await SelftestTranslateAsync(); return true;
             case "--selftest-diff": SelftestDiff(); return true;
             case "--selftest-ocr-paddle": await SelftestOcrPaddleAsync(); return true;
+            case "--selftest-ocr-paddle-screen": await SelftestOcrPaddleScreenAsync(); return true;
+            case "--selftest-ocr-hybrid": await SelftestOcrHybridAsync(); return true;
+            case "--selftest-ocr-rapid": await SelftestOcrRapidAsync(); return true;
+            case "--selftest-ocr-rapid-screen": await SelftestOcrRapidScreenAsync(); return true;
             case "--selftest-e2e": await SelftestE2EAsync(); return true;
             case "--selftest-overlay": SelftestOverlay(); return true;
             case "--selftest-demo": SelftestDemo(); return true;
@@ -157,6 +161,78 @@ public static class SelfTests
         foreach (var l in lines)
             sb.AppendLine($"{l.X:F0},{l.Y:F0},{l.Width:F0}x{l.Height:F0} [{l.Score:F3}] {l.Text}");
         return lines.Count >= 3 ? 0 : 2;
+    });
+
+    /// <summary>--selftest-ocr-paddle-screen:真实全屏 + 多种尺寸裁剪 → PP-OCRv5,摸清社区版可用输入规模。</summary>
+    private static Task SelftestOcrPaddleScreenAsync() => RunFileModeAsync("paddle_screen_ocr_result.txt", async sb =>
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var frame = ScreenCaptureService.CaptureFrame();
+        sw.Stop();
+        sb.AppendLine($"capture_ms={sw.ElapsedMilliseconds} frame={frame.Width}x{frame.Height}");
+        using var engine = new PaddleOcrEngine();
+        sb.AppendLine($"available={engine.IsAvailable}");
+        if (!engine.IsAvailable) return 2;
+
+        // 全屏 + 若干代表性裁剪(演示页/窗口级/对话框级),定位"box sizes <100"限制的触发规模
+        var cases = new List<(string Name, int X, int Y, int W, int H)>
+        {
+            ("full", 0, 0, frame.Width, frame.Height),
+            ("crop_2000x1000", 300, 300, Math.Min(2000, frame.Width - 300), Math.Min(1000, frame.Height - 300)),
+            ("crop_1200x780", 1300, 420, Math.Min(1200, frame.Width - 1300), Math.Min(780, frame.Height - 420)),
+            ("crop_800x500", 300, 300, Math.Min(800, frame.Width - 300), Math.Min(500, frame.Height - 300)),
+            ("crop_500x300", 600, 500, Math.Min(500, frame.Width - 600), Math.Min(300, frame.Height - 500)),
+        };
+        foreach (var c in cases)
+        {
+            if (c.W <= 0 || c.H <= 0) continue;
+            var input = c.Name == "full" ? frame : FrameOps.Crop(frame, c.X, c.Y, c.W, c.H);
+            var t = System.Diagnostics.Stopwatch.StartNew();
+            var lines = await engine.RecognizeAsync(input);
+            t.Stop();
+            sb.AppendLine($"[{c.Name}] {c.W}x{c.H} ocr_ms={t.ElapsedMilliseconds} lines={lines.Count}");
+            foreach (var l in lines.Take(c.Name == "full" ? 20 : 12))
+                sb.AppendLine($"  {l.X + c.X:F0},{l.Y + c.Y:F0},{l.Width:F0}x{l.Height:F0} [{l.Score:F3}] {l.Text}");
+        }
+        return 0;
+    });
+
+    /// <summary>--selftest-ocr-hybrid:合成图应路由到 RapidOCR(高质量主路径),验证混合引擎。</summary>
+    private static Task SelftestOcrHybridAsync() => RunFileModeAsync("hybrid_ocr_result.txt", async sb =>
+    {
+        using var engine = new HybridOcrEngine();
+        var lines = await engine.RecognizeAsync(CreateTestFrame());
+        sb.AppendLine($"engine_available={engine.IsAvailable} lines={lines.Count} expect=3");
+        foreach (var l in lines)
+            sb.AppendLine($"{l.X:F0},{l.Y:F0},{l.Width:F0}x{l.Height:F0} [{l.Score:F3}] {l.Text}");
+        return lines.Count >= 3 ? 0 : 2;
+    });
+
+    /// <summary>--selftest-ocr-rapid:合成图 → RapidOCR(PP-OCRv6 small),验证多语模型识别质量。</summary>
+    private static Task SelftestOcrRapidAsync() => RunFileModeAsync("rapid_ocr_result.txt", async sb =>
+    {
+        using var engine = new RapidOcrEngine();
+        var t = System.Diagnostics.Stopwatch.StartNew();
+        var lines = await engine.RecognizeAsync(CreateTestFrame());
+        t.Stop();
+        sb.AppendLine($"engine_available={engine.IsAvailable} lines={lines.Count} ocr_ms={t.ElapsedMilliseconds} expect=3");
+        foreach (var l in lines)
+            sb.AppendLine($"{l.X:F0},{l.Y:F0},{l.Width:F0}x{l.Height:F0} [{l.Score:F3}] {l.Text}");
+        return lines.Count >= 3 ? 0 : 2;
+    });
+
+    /// <summary>--selftest-ocr-rapid-screen:真实全屏 → RapidOCR(PP-OCRv6 small),验证整屏可用性与耗时。</summary>
+    private static Task SelftestOcrRapidScreenAsync() => RunFileModeAsync("rapid_screen_ocr_result.txt", async sb =>
+    {
+        var frame = ScreenCaptureService.CaptureFrame();
+        using var engine = new RapidOcrEngine();
+        var t = System.Diagnostics.Stopwatch.StartNew();
+        var lines = await engine.RecognizeAsync(frame);
+        t.Stop();
+        sb.AppendLine($"frame={frame.Width}x{frame.Height} ocr_ms={t.ElapsedMilliseconds} lines={lines.Count} available={engine.IsAvailable}");
+        foreach (var l in lines.Take(80))
+            sb.AppendLine($"{l.X:F0},{l.Y:F0},{l.Width:F0}x{l.Height:F0} [{l.Score:F3}] {l.Text}");
+        return engine.IsAvailable && lines.Count > 0 ? 0 : 2;
     });
 
     /// <summary>--selftest-e2e:合成帧 → OCR → 过滤 → 翻译(Echo)→ 渲染,全链路验证。</summary>
@@ -287,13 +363,16 @@ public static class SelfTests
             new("こんにちは世界", 10, 50, 200, 30, 1.0),
             new("冒険者ギルドへようこそ", 10, 90, 260, 30, 1.0),
             new("Hello world this is english", 10, 130, 300, 30, 1.0),
+            new("NPC: We need your help", 10, 160, 300, 30, 1.0),
             new("12345", 10, 170, 100, 30, 1.0),
             new("F5", 10, 210, 50, 30, 1.0),
             new("http://127.0.0.1:1188", 10, 250, 300, 30, 1.0),
+            new("C:\\tools\\demo.exe", 10, 260, 300, 30, 1.0),
             new("한국어 테스트", 10, 290, 200, 30, 1.0),
         };
         var zh = OcrLineFilter.Apply(lines, "ZH");
-        sb.AppendLine($"target=ZH kept={zh.Count} expect=4: " + string.Join(" | ", zh.Select(l => l.Text)));
+        sb.AppendLine($"target=ZH kept={zh.Count} expect=5: " + string.Join(" | ", zh.Select(l => l.Text)));
+        sb.AppendLine($"IsPathLike(NPC对话)={OcrLineFilter.IsPathLike("NPC: We need your help")} expect=False");
         sb.AppendLine($"IsChinese(日文汉字)={OcrLineFilter.IsChinese("冒険者ギルドへようこそ")} expect=False");
         sb.AppendLine($"DetectSourceLang(こんにちは)={OcrLineFilter.DetectSourceLang("こんにちは")} expect=JA");
         sb.AppendLine($"DetectSourceLang(hello)={OcrLineFilter.DetectSourceLang("Hello world")} expect=EN");
@@ -307,7 +386,7 @@ public static class SelfTests
         sb.AppendLine($"paragraphs={paras.Count} expect=2");
         foreach (var p in paras) sb.AppendLine($"  para[{p.Lines.Count}] {p.Text.Replace("\n", "\\n")}");
 
-        var ok = zh.Count == 4 && paras.Count == 2 && !OcrLineFilter.IsChinese("冒険者ギルドへようこそ");
+        var ok = zh.Count == 5 && paras.Count == 2 && !OcrLineFilter.IsChinese("冒険者ギルドへようこそ");
         return Task.FromResult(ok ? 0 : 2);
     });
 
