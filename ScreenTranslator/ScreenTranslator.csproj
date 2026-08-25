@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>ScreenTranslator</RootNamespace>
+    <AssemblyName>ScreenTranslator</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PaddleOCRSharp(PP-OCRv5,幻觉少,自带四角点坐标;模型随包拷贝到输出目录) -->
+    <PackageReference Include="PaddleOCRSharp" Version="6.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Paddle 推理运行时 native 库(该包 build 资产解析为空,手动拷贝;指向自包含 NuGet 缓存目录) -->
+    <None Include="D:\ScreenTranslator\.nuget\packages\paddle.runtime.win_x64\3.3.0.1\build\win_x64\*.*">
+      <Link>%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,42 @@
+# ===== 构建输出 =====
+bin/
+obj/
+*.user
+
+# ===== 本机 dotnet/NuGet 状态(离线依赖缓存,不提交) =====
+.nuget/
+dotappdata/
+dotlocalappdata/
+dotnethome/
+dotnugetcache/
+
+# ===== 开发工具(本地临时下载的 git/gh 便携版,不提交) =====
+.tools/
+
+# ===== 会话/工作目录残留 =====
+.workbuddy/
+.appdata/
+.dotnet-cli-home/
+.localappdata/
+
+# ===== 运行时产物与诊断 =====
+shots/
+crash.txt
+diag.txt
+pipe_dump.txt
+selftest.png
+demo_test.png
+overlay_test.png
+crop_ocr_result.txt
+screen_ocr_result.txt
+filter_result.txt
+
+# ===== 临时分析文件(会话导出等) =====
+_session_extract/
+
+# ===== 第三方工具二进制(需自行部署) =====
+deeplx_windows_amd64.exe
+
+# ===== 系统文件 =====
+Thumbs.db
+Desktop.ini

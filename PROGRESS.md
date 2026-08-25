@@ -1,0 +1,83 @@
+# ScreenTranslator 开发进度记录
+
+更新:2026-08-24(第 7 轮:按 REVIEW.md 修复翻译链路 P0/P1,演示页中文译文覆盖验证通过)
+
+## 第 7 轮改动(REVIEW.md 修复路线图 1/2/4/5/6/7/8 项)
+1. **段落聚合 + 整段翻译**(P0-1):新增 `LineGrouping`——OCR 行按几何关系(垂直间距<1.5×行高且水平重叠>30%)聚合成段落,行间 `\n` 连接一次翻译请求,译文按行拆回(行数不匹配回退原文);一句话被拆成多行时上下文连贯;
+2. **日/韩语言检测修复**(P0-2):`IsChinese` 改为"汉字占比>12% 且假名数<汉字一半";新增 `IsJapanese`(含假名)、`IsKorean`;`IsTargetLanguage` 支持 ZH/JA/EN——目标 ZH 只过滤中文行,日/韩/英文保留翻译;段落按源语言分组(JA/KO/ZH/EN 各自独立翻译),不再整批共用一个源语言;
+3. **Echo 兜底不画块**(P0-3):译文全部==原文时不渲染覆盖块,状态栏提示"翻译服务不可用";管道记录实际使用引擎名;
+4. **译文换行自适应**(P1-7):TextBlock 换行 + Measure 后块高自适应,取消省略号截断;
+5. **半行碎片拼接**(P1-5):切块边界产生的同水平线碎片按"y 重叠>60% + x 相邻≤12px"拼接回整行;
+6. **垃圾过滤**(P1-6):纯数字、含数字短码(<6 字符无空格)、URL/路径(含 :// 或 ≥2 斜杠或冒号)过滤;
+7. **真 LRU 缓存**(P2-10):Dictionary+LinkedList 实现,热台词不被 FIFO 误驱逐;
+8. 自检新增 `--selftest-filter`(语言检测/垃圾过滤/段落聚合,全部通过)。
+
+## 第 6 轮改动
+1. **OCR 精度增强**(Windows OCR 榨干):
+   - 输入**切块(≤1100px)+ 放大 2x** 再识别(实测系统 MaxImageDimension=10000,整图放大 5120x3200 会漏检部分区域——演示窗口文本整屏识别不到,切块后识别成功);
+   - **预处理**:灰度化 + 自动对比度拉伸 + 深色背景反色(黑底白字识别率大增),后台线程执行;
+   - 每块识别带 15 秒超时保护(防 WinRT 挂起);
+2. **翻译链重构**:DeepLX → **MyMemory(免费无需 key)** → Echo。DeepLX 限流(429)/未启动时自动用 MyMemory 出**真译文**(实测 "This is a live demo page" → "这是一个现场演示页面"),不再是原文;状态栏提示 DeepLX 状态(429 = 需配置 DeepL API Key);
+3. **过滤增强**:CJK 判定阈值 30%→12%(中英混合行不再漏判为英文);新增纯符号乱码行过滤;代码路径/操作日志类混合长行(如 `写入ScreenTranslator\Services\...`)被正确过滤;
+4. **演示窗口 Topmost**(不再被全屏窗口遮挡,确保 OCR 能识别到演示页);
+5. 修复多个编译期问题(此前部分轮次 build 实际失败,exe 未更新,导致验证跑在旧版上)。
+
+## 第 5 轮关键修复(为什么之前"点演示没覆盖块")
+1. **覆盖层改为普通窗口 + SetWindowRgn 裁剪**(不再用 WPF 分层窗口 AllowsTransparency):实测该机器上分层窗口内容渲染正常但**不合成上屏**(PrintWindow 能抓到内容、屏幕上看不到)。普通窗口 + 区域裁剪(块并集)必定上屏,GDI 截图可验证(实测截图中出现 92.6% 深色测试块);
+2. **OCR 主引擎切换为 Windows.Media.Ocr**:PaddleOCRSharp 6.2.0 社区版限制"检测框 <100px",全屏截图里正常文本行(>100px)直接抛异常导致**整个 OCR 失败返回 0 行**(实测报 `free community edition only support box sizes <100`)。Windows OCR 全屏 0.3 秒识别 54+ 行,无此限制;
+3. **修复脏区误杀**:BuildOcrRegions 原来用"脏区中心是否在 app 窗口内"判断——首次全屏脏区合并后中心恰在居中的 app 窗口内,导致**OCR 区域为空、识别永不执行**。改为交集面积占比(<50% 保留)+ 空结果兜底全屏;
+4. **修复翻译管线挂死**:DeepLXTranslator 的 SemaphoreSlim **只 Wait 不 Release**,DeepLX 不可用时前 4 个请求异常后信号量泄漏,后续请求永久死等 → 整批翻译永久挂起。加 finally Release + 熔断(失败 60 秒内快速降级)+ 禁用系统代理 + 2 秒短超时(离线降级从 16 秒+ 降到 2 秒);
+5. **过滤规则统一为"交集面积 ≥70% 才排除"**:OcrLineFilter 与 OverlayManager 双重过滤原先不一致(后者"有交集即排除"),与 app 窗口轻微重叠的内容(如演示页)被误杀。
+
+## 第 4 轮改动(投射 + 性能)
+### 1. 正确投射到显示器(而非 app 上)
+- **逐显示器截图**:`ScreenCaptureService` 改为按显示器 `CreateDC(设备名)` 分别 BitBlt 再拼接为虚拟屏幕帧。副屏/多 GPU(笔记本独显+核显)不再黑屏,你显示器上的内容能被完整截到并翻译;
+- **逐显示器覆盖窗**:`OverlayManager` 为每块显示器建一个 `OverlayWindow`(精确贴合该屏边界),物理像素→DIP 按"目标显示器 DPI"换算,抵消 DWM 跨屏缩放——任何 DPI 组合下译文块都精确压在原文位置;
+- **app 自身窗口排除**:应用窗口区域不绘制覆盖块、不参与 OCR/脏区判定(译文明明白白显示在你的显示器/桌面上,不再盖在 app 界面上,app 自身 UI 也不会被翻);
+- 显示器插拔/分辨率变化自动重建覆盖窗(2s 轮询,`DisplayLayout`)。
+### 2. 消除捕获后的卡顿
+- **重活全部移出 UI 线程**:截图/指纹/脏区、Paddle OCR(PNG 编码+推理 `Task.Run`)、背景采样、预览降采样、调试截图存盘;
+- **只翻变化区域**:脏区裁剪后局部 OCR(原先每次全屏 OCR + 全屏 PNG 编码,是最重的两步);无变化直接跳过;
+- **截图前隐藏覆盖层**:覆盖层(分层窗口)会被 BitBlt 捕获,原先形成"翻译自身输出→再识别→再翻译"的反馈循环,现改为隐藏→等合成器生效(35ms)→截图→恢复;
+- **忙锁+合并触发**:一轮运行中再触发只记一次待办,不再叠加并发;
+- **零散优化**:池化像素缓冲(免每帧 3 份全屏数组)、覆盖层内容签名不变跳过重建、PNG 调试截图默认关(复选框)、预览降采样到 480px、避免每次全量重建覆盖层。
+### 3. 悬浮窗渲染风格(小米实时翻译样式)
+- **字幕底块(默认)**:近不透明深色底块 + 白字居中,盖住原文,任何背景(图片/视频/复杂 UI)都清晰,观感同手机实时翻译;
+- **背景采样覆盖**:采样原文背景色填充 + 黑/白对比字,纯色背景时像原文原位替换;
+- UI 下拉框切换(`渲染方式`),即时生效,下次触发应用。
+
+## 项目状态:✅ 可运行,主引擎 = Windows.Media.Ocr(系统自带,无社区版限制;Paddle 因框大小限制不再作主引擎)
+- 源码:`D:\ScreenTranslator\ScreenTranslator\`(WPF,.NET 8 `net8.0-windows10.0.19041.0`)
+- 构建:`pwsh -c "& 'D:\ScreenTranslator\dot.ps1' build"`(workdir = 项目目录;沙箱内脚本调用受限时改用内联环境变量执行 dotnet build)
+- 输出:`bin\Debug\net8.0-windows10.0.19041.0\ScreenTranslator.exe`(注意 TFM 全名目录)
+- NuGet:华为云 **http** artifactory 源;`install-nupkg.ps1` 手动装包(沙箱 https 被拦截,restore 解析依赖时仍会尝试 https 资源 URL,所以所有依赖包须预先手动装进 `D:\ScreenTranslator\.nuget\packages`)
+
+## 已完成 ✅
+- **M1 骨架**:BitBlt 截图(2560x1600 物理像素)、置顶透明穿透覆盖窗、Ctrl+Shift+T 热键、DPI 坐标系统一
+- **M2 OCR**:`IOcrEngine` 抽象;主引擎 **PaddleOcrEngine**(PaddleOCRSharp 6.2.0 + PP-OCRv5 模型随包拷贝,真实置信度 0.95+,中文无空格,四角点→bbox),回退 **WindowsOcrEngine**(系统 OCR);FakeOcrEngine(演示)
+- **M3 翻译**:DeepLX(127.0.0.1:1188)优先 + LRU 缓存 4096 + 批量去重 + 并发 4 + Echo 降级
+- **M4 自动触发**:全局钩子(点击/滚轮/按键)+ 300ms 防抖 + 800ms 冷却 + 64px 分块指纹区域 diff(垂直合并)
+- **M5 打磨**:OcrLineFilter(长度/置信度/目标语言 CJK/忽略区域)、翻译接入主流程、目标语言选择(中/英/日)、文字字号自适应 bbox、全局异常落盘 crash.txt
+
+## 自检命令(全部 exit=0)
+`--diag`、`--selftest`、`--selftest-ocr`(系统 OCR)、`--selftest-ocr-paddle`(PP-OCRv5)、`--selftest-translate`、`--selftest-diff`、`--selftest-e2e`、`--probe-api`(Paddle API 反射)
+
+## 已装 NuGet 包(缓存,勿删)
+- Microsoft.Windows.SDK.NET.Ref 10.0.19041.56(WinRT 投影)
+- PaddleOCRSharp 6.2.0 + Paddle.Runtime.win_x64 3.3.0.1 + System.Drawing.Common 8.0.7 + Microsoft.Win32.SystemEvents 8.0.0 + Newtonsoft.Json 13.0.3
+- 注意:Paddle.Runtime 的 build 资产解析为空,**native 拷贝已固化在 csproj**(绝对路径 None Include)
+
+## 待办/已知限制
+1. **DeepLX 未实测**:用户机器部署 DeepLX(1188 端口)后免费高质量翻译生效;当前离线降级 Echo(显示原文)
+2. ~~多显示器不同 DPI 跨屏错位~~ ✅ 已修复:逐显示器截图 + 逐显示器覆盖窗按各屏 DPI 换算(非系统 DPI 的屏上文字仍有轻微 DWM 缩放,位置始终精确)
+3. 复杂背景抹除:平均色填充(纯色背景好);图片/视频文字需 inpaint/字幕底块
+4. ~~覆盖层每次全量重建~~ ✅ 已修复:内容签名不变跳过重建
+5. 截图前隐藏覆盖层 35ms:触发时译文块有一瞬闪烁(换取"不翻译自身输出"的正确性)
+
+## 关键文件
+- `Services\`:DisplayLayout / ScreenCaptureService / OverlayManager / OverlayWindow / Ocr\(WindowsOcrEngine, PaddleOcrEngine, OcrLineFilter) / OcrOverlayRenderer / Translate\(DeepLX, TranslationPipeline) / InputHookService / AutoTriggerService / ScreenDiff
+- `App.xaml.cs`(自检+DPI+异常落盘)、`MainWindow.xaml(.cs)`(控制面板,引擎择优)
+- 工具:`dot.ps1`(构建环境重定向)、`install-nupkg.ps1`(离线装包)、`NuGet.Config`(http 源)
+
+## 环境备忘
+- dotnet 8.0.413;沙箱只通 HTTP(HTTPS 拦截);读文件用 read,写用 write/edit
