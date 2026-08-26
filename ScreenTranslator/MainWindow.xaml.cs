@@ -26,6 +26,10 @@ public partial class MainWindow : Window
     /// <summary>应用自身窗口区域(物理像素,虚拟屏幕坐标系):覆盖层不绘制、OCR 不识别、脏区不算变化。</summary>
     private Rect _appRect = Rect.Empty;
 
+    /// <summary>悬浮状态框(游戏时查看进度/切换模式)及其物理区域(排除规则同主窗口)。</summary>
+    private StatusWidgetWindow? _widget;
+    private Rect _widgetRect = Rect.Empty;
+
     private bool _busy;
     private bool _pending;
 
@@ -55,6 +59,7 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             _overlay.SyncWindows();
+            CreateWidget();
             UpdateAppRect();
             var hotkeyOk = _hotkey.Register();
             Log($"热键:{(hotkeyOk ? "已注册 Ctrl+Shift+T" : "注册失败(可能被其他程序占用),请用按钮触发!")};"
@@ -68,9 +73,40 @@ public partial class MainWindow : Window
         {
             _hotkey.Dispose();
             _autoTrigger?.Dispose();
+            _widget?.Close();
             _overlay.Dispose();
             (_ocr as IDisposable)?.Dispose();
         };
+    }
+
+    /// <summary>创建悬浮状态框:状态显示 + 渲染方式/目标语言快捷切换(转发到主窗口下拉框,复用同一套逻辑)。</summary>
+    private void CreateWidget()
+    {
+        _widget = new StatusWidgetWindow();
+        _widget.SetStyleLabel(_renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle);
+        _widget.SetLangLabel(_targetLang);
+        _widget.SetStatus("空闲");
+        _widget.StyleToggleRequested += () =>
+            StyleBox.SelectedIndex = StyleBox.SelectedIndex == 0 ? 1 : 0;
+        _widget.LangCycleRequested += () =>
+            LangBox.SelectedIndex = (LangBox.SelectedIndex + 1) % LangBox.Items.Count;
+        _widget.LocationChanged += (_, _) => UpdateAppRect();
+        if (ChkWidget.IsChecked == true) _widget.Show();
+    }
+
+    /// <summary>悬浮框显隐。</summary>
+    private void OnWidgetChecked(object sender, RoutedEventArgs e)
+    {
+        if (_widget is not null && !_widget.IsVisible) _widget.Show();
+        UpdateAppRect();
+    }
+
+    private void OnWidgetUnchecked(object sender, RoutedEventArgs e)
+    {
+        _widget?.Hide();
+        _widgetRect = Rect.Empty;
+        _overlay.ExtraExcludes = Array.Empty<Rect>();
+        UpdateAppRect();
     }
 
     private void UpdateAppRect()
@@ -87,7 +123,24 @@ public partial class MainWindow : Window
             _appRect = new Rect(r.Left - vs.X, r.Top - vs.Y, r.Right - r.Left, r.Bottom - r.Top);
         }
         _overlay.AppExcludeRect = _appRect;
+
+        // 悬浮状态框区域同样排除(不识别/不覆盖/不算脏区)
+        _widgetRect = Rect.Empty;
+        if (_widget is not null && _widget.IsVisible)
+        {
+            var wh = new WindowInteropHelper(_widget).Handle;
+            if (wh != IntPtr.Zero && GetWindowRect(wh, out var wr))
+            {
+                var vs = DisplayLayout.VirtualScreen;
+                _widgetRect = new Rect(wr.Left - vs.X, wr.Top - vs.Y, wr.Right - wr.Left, wr.Bottom - wr.Top);
+            }
+        }
+        _overlay.ExtraExcludes = _widgetRect.IsEmpty ? Array.Empty<Rect>() : new[] { _widgetRect };
     }
+
+    /// <summary>全部排除区域(主窗口 + 悬浮框)。</summary>
+    private Rect[] ExcludeRects() =>
+        _widgetRect.IsEmpty ? new[] { _appRect } : new[] { _appRect, _widgetRect };
 
     /// <summary>主流程:截图(先隐藏覆盖层)→ 脏区 diff → 区域 OCR → 翻译 → 覆盖渲染。全部重活在后台线程。</summary>
     private async void TranslateOnce()
@@ -110,6 +163,7 @@ public partial class MainWindow : Window
         {
             Diag.Dump("TranslateOnce EXC: " + ex);
             Log("失败:" + ex.Message);
+            _widget?.SetStatus("失败:" + ex.Message);
         }
         finally
         {
@@ -127,6 +181,8 @@ public partial class MainWindow : Window
 
     private async Task RunPipelineAsync()
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        _widget?.SetStatus("截图中…");
         Diag.Dump($"pipeline: start appRect={_appRect}");
         // 1) 截图前隐藏覆盖层:覆盖层(分层窗口)会被 BitBlt 捕获,若不隐藏会形成"翻译自身输出"的反馈循环
         _overlay.HideAll();
@@ -150,12 +206,14 @@ public partial class MainWindow : Window
             Log($"变化 {dirty.Count} 区");
 
             // 3) 脏区决定 OCR 范围:无变化跳过;小区域只裁剪识别(全屏 OCR 是最重的一步)
-            var regions = BuildOcrRegions(dirty, _appRect, frame.Width, frame.Height, out var fullFrame);
+            var regions = BuildOcrRegions(dirty, ExcludeRects(), frame.Width, frame.Height, out var fullFrame);
             if (regions.Count == 0)
             {
                 Log("无有效变化,跳过识别");
+                _widget?.SetStatus("无变化");
                 return;
             }
+            _widget?.SetStatus($"识别中({(fullFrame ? "全屏" : "横带")})…");
 
             var lines = new List<OcrLine>();
             foreach (var (rx, ry, rw, rh) in regions)
@@ -175,8 +233,12 @@ public partial class MainWindow : Window
             Diag.Dump($"ocr lines={lines.Count}: {string.Join(" | ", lines.Select(l => l.Text).Take(25))}");
 
             var filtered = OcrLineFilter.Apply(lines, _targetLang,
-                ignoreRects: _appRect.IsEmpty ? null :
-                    new[] { ((int)_appRect.X, (int)_appRect.Y, (int)_appRect.Width, (int)_appRect.Height) });
+                ignoreRects: ExcludeRects()
+                    .Where(r => !r.IsEmpty)
+                    .Select(r => ((int)r.X, (int)r.Y, (int)r.Width, (int)r.Height))
+                    .ToArray());
+            // 振假名/上标小字抑制:日文排版的小字注音会被 OCR 成独立小行,翻译后成漂浮碎片
+            filtered = OcrLineFilter.SuppressRuby(filtered);
             Diag.Dump($"after filter={filtered.Count}: {string.Join(" | ", filtered.Select(l => l.Text).Take(25))}");
 
             if (filtered.Count == 0)
@@ -188,6 +250,7 @@ public partial class MainWindow : Window
                 return;
             }
             Log($"过滤后 {filtered.Count} 行,翻译…");
+            _widget?.SetStatus($"翻译中 {filtered.Count} 行…");
 
             // 段落聚合:一句话被 OCR 拆成多行时合并为段落(行间 \n 连接),整段一次请求,
             // 译文按 \n 拆回——上下文连贯,通顺度大幅提升(对应架构 §2.5 批量请求)。
@@ -204,6 +267,7 @@ public partial class MainWindow : Window
             {
                 _overlay.Clear();
                 Log("翻译服务不可用(DeepLX/Edge/MyMemory 均失败),未覆盖原文——请检查网络后重试");
+                _widget?.SetStatus("翻译服务不可用");
                 return;
             }
             if (pairs.Count < filtered.Count)
@@ -253,6 +317,7 @@ public partial class MainWindow : Window
             {
                 Log($"完成:{filtered.Count} 行已覆盖,缓存 {_pipeline.CacheCount} 条");
             }
+            _widget?.SetStatus($"完成 {pairs.Count} 块 · {sw.Elapsed.TotalSeconds:0.0}s · {_pipeline.LastEngineName ?? "缓存"}");
         }
         finally
         {
@@ -262,16 +327,20 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 段落聚合翻译:OCR 行按几何关系聚合成段落(一句话拆成多行时合并),
-    /// 段落按源语言分组(日/韩/中/英各自检测),每组一次批量请求;
-    /// 译文按换行拆回与行一一对应(行数不匹配时回退原文,保证不丢内容)。
+    /// 段落按源语言分组(日/韩/中/英各自检测),各语言组**并行**发起批量请求;
+    /// 译文按换行拆回与行一一对应。拆回行数失配的段落不再逐个串行重试,
+    /// 而是跨段收集后按语言合并成**一次批量逐行重试**(语言间也并行)——
+    /// 此前每个失配段落一次 HTTP 请求,长文档失配段落多时延迟线性堆叠。
     /// </summary>
     private async Task<IReadOnlyList<string>> TranslateParagraphsAsync(List<OcrLine> filtered)
     {
         var result = new Dictionary<OcrLine, string>();
         var paragraphs = LineGrouping.Group(filtered);
+        var mismatched = new List<(LineGrouping.Paragraph Para, string From)>();
 
-        // 按源语言分组:每段独立检测(含假名→JA,含韩文→KO,汉字主导→ZH,否则 EN)
-        foreach (var langGroup in paragraphs.GroupBy(p => OcrLineFilter.DetectSourceLang(p.Text)))
+        // 阶段 1:各语言组并行;每组段落一次批量请求(Edge 天然支持数组批量)
+        var langGroups = paragraphs.GroupBy(p => OcrLineFilter.DetectSourceLang(p.Text)).ToList();
+        await Task.WhenAll(langGroups.Select(async langGroup =>
         {
             var from = langGroup.Key;
             var paraTexts = langGroup.Select(p => p.Text).ToList();
@@ -283,18 +352,28 @@ public partial class MainWindow : Window
                 if (parts.Length == para.Lines.Count)
                 {
                     for (var i = 0; i < parts.Length; i++)
-                        result[para.Lines[i]] = parts[i].Trim();
+                        lock (result) result[para.Lines[i]] = parts[i].Trim();
                 }
                 else
                 {
-                    // 译文行数不匹配(引擎偶发丢/并换行):逐行重试(走管道行级缓存),仍失败的行保留原文、不渲染
-                    Diag.Dump($"paragraph split mismatch: lines={para.Lines.Count} parts={parts.Length}, per-line retry");
-                    var lineTexts = para.Lines.Select(l => l.Text).ToList();
-                    var lineTr = await _pipeline.TranslateAsync(lineTexts, from, _targetLang);
-                    for (var i = 0; i < para.Lines.Count; i++)
-                        result[para.Lines[i]] = (lineTr[i] ?? para.Lines[i].Text).Trim();
+                    // 引擎偶发丢/并换行:记下,稍后统一批量逐行重试
+                    Diag.Dump($"paragraph split mismatch: lines={para.Lines.Count} parts={parts.Length}");
+                    lock (mismatched) mismatched.Add((para, from));
                 }
             }
+        }));
+
+        // 阶段 2:失配段落的行跨段合并,按语言一次批量逐行重试(走管道行级缓存;仍失败的行保留原文不渲染)
+        if (mismatched.Count > 0)
+        {
+            await Task.WhenAll(mismatched.GroupBy(m => m.From).Select(async g =>
+            {
+                var retryLines = g.SelectMany(m => m.Para.Lines).ToList();
+                var lineTr = await _pipeline.TranslateAsync(
+                    retryLines.Select(l => l.Text).ToList(), g.Key, _targetLang);
+                for (var i = 0; i < retryLines.Count; i++)
+                    lock (result) result[retryLines[i]] = (lineTr[i] ?? retryLines[i].Text).Trim();
+            }));
         }
 
         return filtered.Select(l => result.TryGetValue(l, out var t) ? t : l.Text).ToList();
@@ -308,13 +387,13 @@ public partial class MainWindow : Window
     /// 带高超过半屏时退回全屏。
     /// </summary>
     private static List<(int X, int Y, int W, int H)> BuildOcrRegions(
-        List<(int X, int Y, int W, int H)> dirty, Rect appRect, int fw, int fh, out bool full)
+        List<(int X, int Y, int W, int H)> dirty, IReadOnlyList<Rect> excludes, int fw, int fh, out bool full)
     {
         full = false;
-        // 丢弃"几乎完全落在 app 窗口内"的脏区(如 app 自身状态栏变化);
+        // 丢弃"几乎完全落在排除区域内"的脏区(如 app 自身窗口/悬浮状态框的变化);
         // 注意不能用"中心在窗口内"判断——全屏脏区合并后中心恰在居中的 app 窗口内,会把全屏误杀。
         var relevant = dirty
-            .Where(r => appRect.IsEmpty || IntersectRatio(r, appRect) < 0.5)
+            .Where(r => excludes.All(ex => ex.IsEmpty || IntersectRatio(r, ex) < 0.5))
             .ToList();
         // 兜底:全部被过滤时(理论上不应发生)退回全屏,保证 OCR 一定会执行
         if (relevant.Count == 0) return new List<(int, int, int, int)> { (0, 0, fw, fh) };

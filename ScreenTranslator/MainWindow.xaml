@@ -14,6 +14,8 @@
                   Checked="OnAutoChecked" Unchecked="OnAutoUnchecked"/>
         <CheckBox x:Name="ChkSaveShot" Margin="0,6,0,0" Content="保存调试截图(每帧全屏 PNG,慢,默认关)"
                   IsChecked="False"/>
+        <CheckBox x:Name="ChkWidget" Margin="0,6,0,0" Content="悬浮状态框(游戏时查看翻译进度/快捷切换模式)"
+                  IsChecked="True" Checked="OnWidgetChecked" Unchecked="OnWidgetUnchecked"/>
         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
             <TextBlock Text="目标语言:" VerticalAlignment="Center"/>
             <ComboBox x:Name="LangBox" Width="130" SelectedIndex="0" SelectionChanged="OnLangChanged">

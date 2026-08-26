@@ -18,6 +18,9 @@ public sealed class OverlayManager : IDisposable
     /// <summary>应用自身窗口区域(物理像素,虚拟屏幕坐标系):该区域内的图元不绘制。</summary>
     public Rect AppExcludeRect { get; set; } = Rect.Empty;
 
+    /// <summary>额外排除区域(如悬浮状态框):这些区域内的图元同样不绘制。</summary>
+    public IReadOnlyList<Rect> ExtraExcludes { get; set; } = Array.Empty<Rect>();
+
     /// <summary>当前是否绘制了图元(决定截图前是否需要隐藏)。</summary>
     public bool HasItems { get; private set; }
 
@@ -60,8 +63,10 @@ public sealed class OverlayManager : IDisposable
     {
         HasItems = items.Count > 0;
         var app = AppExcludeRect;
+        var extra = ExtraExcludes;
         var filtered = items
-            .Where(i => app.IsEmpty || !Intersects(i, app))
+            .Where(i => (app.IsEmpty || !Intersects(i, app))
+                        && extra.All(ex => ex.IsEmpty || !Intersects(i, ex)))
             .ToList();
 
         foreach (var win in _windows)

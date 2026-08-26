@@ -32,6 +32,38 @@ public static class OcrLineFilter
         return result;
     }
 
+    /// <summary>
+    /// 振假名(ruby)/上标小字抑制:日文书籍排版会在汉字上方标小字注音,OCR 把它们识别成独立小行,
+    /// 单独翻译后变成漂浮在主文上方的碎片块(如"桃子/阅读/会议"),割裂段落衔接。
+    /// 启发式删除:行高 &lt; 0.55×中位行高,且与某个正常行水平重叠 ≥40%,且紧贴其上方
+    /// (小行底边到大行顶边的间距 ∈ [-0.3×大行高, 1.2×小行高])。
+    /// 仅当行数 ≥4(中位数有意义)时启用;已知误杀风险:极小的合法 UI 文本,误报时调高重叠/行高阈值。
+    /// </summary>
+    public static List<OcrLine> SuppressRuby(IReadOnlyList<OcrLine> lines)
+    {
+        if (lines.Count < 4) return new List<OcrLine>(lines);
+        var median = lines.Select(l => l.Height).OrderBy(h => h).ElementAt(lines.Count / 2);
+        if (median <= 0) return new List<OcrLine>(lines);
+
+        var smallH = median * 0.55;
+        var result = new List<OcrLine>(lines.Count);
+        foreach (var l in lines)
+        {
+            if (l.Height >= smallH) { result.Add(l); continue; }
+            var isRuby = false;
+            foreach (var o in lines)
+            {
+                if (o.Height < smallH) continue;
+                var overlap = Math.Min(l.X + l.Width, o.X + o.Width) - Math.Max(l.X, o.X);
+                if (overlap < l.Width * 0.4) continue;
+                var gap = o.Y - (l.Y + l.Height); // l 在 o 上方的垂直间距(负值 = 轻微重叠)
+                if (gap >= -o.Height * 0.3 && gap <= l.Height * 1.2) { isRuby = true; break; }
+            }
+            if (!isRuby) result.Add(l);
+        }
+        return result;
+    }
+
     // ---------- 垃圾文本 ----------
 
     /// <summary>乱码过滤:不含任何字母/数字/CJK/假名/韩文的行(纯标点/装饰符号)直接丢弃。</summary>
