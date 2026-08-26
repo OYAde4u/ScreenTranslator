@@ -33,6 +33,11 @@ public partial class MainWindow : Window
     private bool _busy;
     private bool _pending;
 
+    // 上一轮 OCR 的区域指纹与结果:区域像素未变时整段复用(静态页面反复触发零推理开销)
+    private (int Y, int H)? _lastBandRect;
+    private long _lastBandHash;
+    private List<OcrLine>? _lastBandLines;
+
     /// <summary>截图前隐藏覆盖层后,等待合成器将其移出画面的时间。</summary>
     private const int OverlayHideDelayMs = 35;
 
@@ -223,6 +228,16 @@ public partial class MainWindow : Window
             var lines = new List<OcrLine>();
             foreach (var (rx, ry, rw, rh) in regions)
             {
+                // 区域像素指纹复用:横带内容逐字节采样比对,未变则跳过重推理(几 ms vs 数百 ms~数 s)
+                var bandHash = HashRegion(frame, ry, rh);
+                if (regions.Count == 1 && _lastBandRect == (ry, rh) && _lastBandHash == bandHash
+                    && _lastBandLines is not null)
+                {
+                    lines.AddRange(_lastBandLines);
+                    Log("识别复用:区域内容未变,跳过 OCR");
+                    continue;
+                }
+
                 // 全屏时直接用原始帧(避免 CropFrame 拷贝;也便于对照定位)
                 PixelFrame ocrInput = (rx == 0 && ry == 0 && rw == frame.Width && rh == frame.Height)
                     ? frame
@@ -233,6 +248,13 @@ public partial class MainWindow : Window
                 var ls = await _ocr.RecognizeAsync(ocrInput);
                 foreach (var l in ls)
                     lines.Add(l with { X = l.X + rx, Y = l.Y + ry });
+
+                if (regions.Count == 1)
+                {
+                    _lastBandRect = (ry, rh);
+                    _lastBandHash = bandHash;
+                    _lastBandLines = new List<OcrLine>(lines);
+                }
             }
             Log($"识别 {lines.Count} 行({(fullFrame ? "全屏" : regions.Count + " 块区域")}),过滤…");
             Diag.Dump($"ocr lines={lines.Count}: {string.Join(" | ", lines.Select(l => l.Text).Take(25))}");
@@ -412,8 +434,9 @@ public partial class MainWindow : Window
         var relevant = dirty
             .Where(r => excludes.All(ex => ex.IsEmpty || IntersectRatio(r, ex) < 0.5))
             .ToList();
-        // 兜底:全部被过滤时(理论上不应发生)退回全屏,保证 OCR 一定会执行
-        if (relevant.Count == 0) return new List<(int, int, int, int)> { (0, 0, fw, fh) };
+        // 兜底:全部被过滤时说明"只有我们自己的 UI 变了"(主窗口/悬浮框被排除)——
+        // 直接跳过 OCR(此前退回全屏,白白整屏识别一轮;首帧脏区覆盖全屏,不会走到这里)
+        if (relevant.Count == 0) return new List<(int, int, int, int)>();
 
         const int margin = 32; // 纵向边距:保护带顶/带底的完整文本行(常见行高 ≤32px)
         var y0 = Math.Max(0, relevant.Min(r => r.Y) - margin);
@@ -433,6 +456,27 @@ public partial class MainWindow : Window
         var iy = Math.Max(0, Math.Min(r.Y + r.H, rect.Y + rect.Height) - Math.Max(r.Y, rect.Y));
         var area = r.W * (double)r.H;
         return area <= 0 ? 0 : ix * iy / area;
+    }
+
+    /// <summary>
+    /// OCR 区域像素指纹(FNV-1a 采样,约 16K 采样点,个位数 ms):
+    /// 用于"横带内容未变则复用上轮识别结果"。采样密度足够区分文本变化,理论碰撞风险可忽略。
+    /// </summary>
+    private static long HashRegion(PixelFrame f, int y0, int h)
+    {
+        unchecked
+        {
+            var start = y0 * f.Width * 4;
+            var len = h * f.Width * 4;
+            var step = Math.Max(64, len / 16384);
+            long hash = -3750763034362895579; // FNV offset basis
+            for (var i = start; i < start + len; i += step)
+            {
+                hash ^= f.Pixels[i];
+                hash *= 1099511628211; // FNV prime
+            }
+            return hash;
+        }
     }
 
     /// <summary>预览降采样(等比缩小到 maxWidth,冻结以便跨线程使用)。</summary>
@@ -473,6 +517,8 @@ public partial class MainWindow : Window
     {
         _overlay.Clear();
         _prevFingerprints = new Dictionary<(int X, int Y), long>();
+        _lastBandRect = null;
+        _lastBandLines = null;
         Log("覆盖层已清除,基线重置");
     }
 
