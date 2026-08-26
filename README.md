@@ -10,6 +10,15 @@
 
 ---
 
+## 📥 下载安装(推荐)
+
+到 [Releases](https://github.com/OYAde4u/ScreenTranslator/releases) 下载 **ScreenTranslator-Setup-1.0.0.exe**,双击安装即可——
+自包含打包,**无需安装 .NET 运行时**,无需管理员权限,装完桌面出现「屏幕实时翻译」快捷方式。
+
+> 免安装版:clone 后 `pwsh -File tools\pack.ps1` 自动发布到 `publish\ScreenTranslator.exe`(打开 1 层文件夹即到 exe)。
+
+---
+
 ## ✨ 功能特性
 
 - 🎯 **原文位置覆盖**:OCR 精确定位文字坐标,译文以「字幕底块」样式盖住原文,不遮画面其他内容;
