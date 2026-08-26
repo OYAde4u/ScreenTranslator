@@ -163,8 +163,12 @@ public sealed class OverlayWindow : Window
 
             if (!string.IsNullOrEmpty(item.Text))
             {
-                // 字号自适应:受 bbox 高度约束,同时按文本长度收缩以不溢出宽度
-                var fs = Math.Min(Math.Max(8.0, dipH * 0.7), dipW / Math.Max(1.0, item.Text.Length * 0.62));
+                // 字号自适应(多行感知):初始值同时受"行数×行高"和"最长行宽度"约束,
+                // 再迭代收缩 7% 直到换行后的实际高度放得下——避免译文过长导致块高膨胀压住相邻块(字体叠加)
+                var segs = item.Text.Split('\n');
+                var longest = Math.Max(1, segs.Max(x => x.Length));
+                var fs = Math.Min(Math.Max(8.0, dipH * 0.7 / Math.Max(1, segs.Length)),
+                                  dipW / (longest * 0.62));
                 var fgBrush = new SolidColorBrush(item.Fg);
                 fgBrush.Freeze();
 
@@ -181,6 +185,12 @@ public sealed class OverlayWindow : Window
                     TextTrimming = TextTrimming.None,
                 };
                 tb.Measure(new Size(dipW, double.PositiveInfinity));
+                while (tb.DesiredSize.Height > dipH + 2 && fs > 8)
+                {
+                    fs *= 0.93;
+                    tb.FontSize = fs;
+                    tb.Measure(new Size(dipW, double.PositiveInfinity));
+                }
                 var textH = tb.DesiredSize.Height;
 
                 // 块高 = max(原文行高, 译文换行后高度 + 边距);只有超出时才长高,保持贴合原文

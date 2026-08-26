@@ -56,6 +56,24 @@ public static class OcrOverlayRenderer
         return items;
     }
 
+    /// <summary>
+    /// 生成段落级覆盖图元(字幕风格):一个深色整块覆盖段落全部行的联合区域(含行间隙),
+    /// 译文按行 \n 连接后在块内整体换行,左对齐。
+    /// 为什么按段落而不是逐行:游戏对话框/小说段落行距密,逐行块各自膨胀会互相叠压(字体叠加),
+    /// 且行间残句(如句尾被 OCR 拆出的"に。")会露出;整块覆盖从结构上消除这两个问题。
+    /// </summary>
+    public static OverlayItem BuildParagraph(IReadOnlyList<(OcrLine Line, string Text)> lines,
+        double padding = 4.0)
+    {
+        var x0 = lines.Min(l => l.Line.X) - padding;
+        var y0 = lines.Min(l => l.Line.Y) - padding;
+        var x1 = lines.Max(l => l.Line.X + l.Line.Width) + padding;
+        var y1 = lines.Max(l => l.Line.Y + l.Line.Height) + padding;
+        var text = string.Join("\n", lines.Select(l => l.Text));
+        return new OverlayItem(x0, y0, x1 - x0, y1 - y0,
+            Color.FromArgb(235, 14, 14, 16), text, Colors.White, Centered: false);
+    }
+
     /// <summary>区域平均色(降采样步长 4,忽略 alpha)。</summary>
     private static Color SampleAverage(PixelFrame f, double x, double y, double w, double h)
     {

@@ -274,9 +274,21 @@ public partial class MainWindow : Window
                 Log($"提示:{filtered.Count - pairs.Count} 行未翻出(保留原文不覆盖)");
 
             var items = await Task.Run(() =>
-                pairs
+            {
+                // 字幕风格:按段落整块渲染(覆盖段落行联合区域,译文整体换行)——
+                // 逐行块在密集对话框中会膨胀互压(字体叠加),整块从结构上消除叠加
+                if (_renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle && pairs.Count > 1)
+                {
+                    var byLine = pairs.ToDictionary(p => p.First, p => p.Second);
+                    return LineGrouping.Group(pairs.Select(p => p.First).ToList())
+                        .Select(para => OcrOverlayRenderer.BuildParagraph(
+                            para.Lines.Select(l => (l, byLine[l])).ToList()))
+                        .ToList();
+                }
+                return pairs
                     .Select(p => OcrOverlayRenderer.BuildOne(frame, p.First, p.Second, _renderStyle))
-                    .ToList());
+                    .ToList();
+            });
 
             // 5) UI:增量渲染覆盖层(自动跳过应用窗口区域;内容未变时内部跳过重建)
             _overlay.SetItems(items);
