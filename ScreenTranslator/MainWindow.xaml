@@ -23,11 +23,7 @@
                 <ComboBoxItem Content="英文 EN" Tag="EN"/>
                 <ComboBoxItem Content="日文 JA" Tag="JA"/>
             </ComboBox>
-            <TextBlock Text="  渲染方式:" VerticalAlignment="Center"/>
-            <ComboBox x:Name="StyleBox" Width="160" SelectedIndex="0" SelectionChanged="OnStyleChanged">
-                <ComboBoxItem Content="字幕底块(推荐)" Tag="Subtitle"/>
-                <ComboBoxItem Content="背景采样覆盖" Tag="Background"/>
-            </ComboBox>
+            <TextBlock Text="  渲染:背景采样覆盖(取文本周围底色原位替换)" VerticalAlignment="Center" Foreground="#666"/>
         </StackPanel>
         <Image x:Name="PreviewImage" Margin="0,12,0,0" MaxHeight="150" Stretch="Uniform"
                SnapsToDevicePixels="True"/>

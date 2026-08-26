@@ -21,7 +21,6 @@ public partial class MainWindow : Window
     private AutoTriggerService? _autoTrigger;
     private Dictionary<(int X, int Y), long> _prevFingerprints = new();
     private string _targetLang = "ZH";
-    private OcrOverlayRenderer.RenderStyle _renderStyle = OcrOverlayRenderer.RenderStyle.Subtitle;
 
     /// <summary>应用自身窗口区域(物理像素,虚拟屏幕坐标系):覆盖层不绘制、OCR 不识别、脏区不算变化。</summary>
     private Rect _appRect = Rect.Empty;
@@ -88,12 +87,9 @@ public partial class MainWindow : Window
     private void CreateWidget()
     {
         _widget = new StatusWidgetWindow();
-        _widget.SetStyleLabel(_renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle);
         _widget.SetLangLabel(_targetLang);
         _widget.SetAutoState(ChkAuto.IsChecked == true);
         _widget.SetStatus("空闲");
-        _widget.StyleToggleRequested += () =>
-            StyleBox.SelectedIndex = StyleBox.SelectedIndex == 0 ? 1 : 0;
         _widget.LangCycleRequested += () =>
             LangBox.SelectedIndex = (LangBox.SelectedIndex + 1) % LangBox.Items.Count;
         _widget.TriggerRequested += () => TranslateOnce();
@@ -301,21 +297,9 @@ public partial class MainWindow : Window
                 Log($"提示:{filtered.Count - pairs.Count} 行未翻出(保留原文不覆盖)");
 
             var items = await Task.Run(() =>
-            {
-                // 字幕风格:按段落整块渲染(覆盖段落行联合区域,译文整体换行)——
-                // 逐行块在密集对话框中会膨胀互压(字体叠加),整块从结构上消除叠加
-                if (_renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle && pairs.Count > 1)
-                {
-                    var byLine = pairs.ToDictionary(p => p.First, p => p.Second);
-                    return LineGrouping.Group(pairs.Select(p => p.First).ToList())
-                        .Select(para => OcrOverlayRenderer.BuildParagraph(
-                            para.Lines.Select(l => (l, byLine[l])).ToList()))
-                        .ToList();
-                }
-                return pairs
-                    .Select(p => OcrOverlayRenderer.BuildOne(frame, p.First, p.Second, _renderStyle))
-                    .ToList();
-            });
+                pairs
+                    .Select(p => OcrOverlayRenderer.BuildOne(frame, p.First, p.Second))
+                    .ToList());
 
             // 5) UI:增量渲染覆盖层(自动跳过应用窗口区域;内容未变时内部跳过重建)
             _overlay.SetItems(items);
@@ -546,18 +530,6 @@ public partial class MainWindow : Window
             _targetLang = lang;
             _widget?.SetLangLabel(lang);
             Log($"目标语言:{lang}");
-        }
-    }
-
-    private void OnStyleChanged(object sender, RoutedEventArgs e)
-    {
-        if (StyleBox.SelectedItem is ComboBoxItem item && item.Tag is string style)
-        {
-            _renderStyle = style == "Background"
-                ? OcrOverlayRenderer.RenderStyle.Background
-                : OcrOverlayRenderer.RenderStyle.Subtitle;
-            _widget?.SetStyleLabel(_renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle);
-            Log($"渲染方式:{( _renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle ? "字幕底块" : "背景采样")}");
         }
     }
 
