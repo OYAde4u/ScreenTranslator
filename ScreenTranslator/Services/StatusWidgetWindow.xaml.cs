@@ -15,6 +15,15 @@ public sealed partial class StatusWidgetWindow : Window
     /// <summary>点击"目标语言"按钮(中 → 英 → 日 循环)。</summary>
     public event Action? LangCycleRequested;
 
+    /// <summary>点击"▶"按钮(立即翻译一次)。</summary>
+    public event Action? TriggerRequested;
+
+    /// <summary>点击"自动"按钮(开关自动触发)。</summary>
+    public event Action? AutoToggleRequested;
+
+    /// <summary>点击"×"按钮(隐藏悬浮框)。</summary>
+    public event Action? HideRequested;
+
     public StatusWidgetWindow()
     {
         InitializeComponent();
@@ -51,6 +60,16 @@ public sealed partial class StatusWidgetWindow : Window
         };
     }
 
+    /// <summary>更新自动触发按钮状态(开=高亮蓝底,关=灰底)。</summary>
+    public void SetAutoState(bool isOn)
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(() => SetAutoState(isOn)); return; }
+        BtnAuto.Content = isOn ? "自动✓" : "自动";
+        BtnAuto.Background = new System.Windows.Media.SolidColorBrush(
+            isOn ? System.Windows.Media.Color.FromRgb(0x0F, 0x6B, 0xBD)
+                 : System.Windows.Media.Color.FromRgb(0x4A, 0x4A, 0x4F));
+    }
+
     private void OnDragStart(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState == MouseButtonState.Pressed) DragMove();
@@ -59,4 +78,10 @@ public sealed partial class StatusWidgetWindow : Window
     private void OnStyleClick(object sender, RoutedEventArgs e) => StyleToggleRequested?.Invoke();
 
     private void OnLangClick(object sender, RoutedEventArgs e) => LangCycleRequested?.Invoke();
+
+    private void OnTriggerClick(object sender, RoutedEventArgs e) => TriggerRequested?.Invoke();
+
+    private void OnAutoClick(object sender, RoutedEventArgs e) => AutoToggleRequested?.Invoke();
+
+    private void OnHideClick(object sender, RoutedEventArgs e) => HideRequested?.Invoke();
 }

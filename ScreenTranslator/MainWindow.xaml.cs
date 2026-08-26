@@ -85,11 +85,16 @@ public partial class MainWindow : Window
         _widget = new StatusWidgetWindow();
         _widget.SetStyleLabel(_renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle);
         _widget.SetLangLabel(_targetLang);
+        _widget.SetAutoState(ChkAuto.IsChecked == true);
         _widget.SetStatus("空闲");
         _widget.StyleToggleRequested += () =>
             StyleBox.SelectedIndex = StyleBox.SelectedIndex == 0 ? 1 : 0;
         _widget.LangCycleRequested += () =>
             LangBox.SelectedIndex = (LangBox.SelectedIndex + 1) % LangBox.Items.Count;
+        _widget.TriggerRequested += () => TranslateOnce();
+        _widget.AutoToggleRequested += () =>
+            ChkAuto.IsChecked = !(ChkAuto.IsChecked == true);
+        _widget.HideRequested += () => ChkWidget.IsChecked = false;
         _widget.LocationChanged += (_, _) => UpdateAppRect();
         if (ChkWidget.IsChecked == true) _widget.Show();
     }
@@ -475,6 +480,7 @@ public partial class MainWindow : Window
     {
         _autoTrigger = new AutoTriggerService(TranslateOnce);
         _autoTrigger.Start();
+        _widget?.SetAutoState(true);
         Log("自动触发已开启(点击/滚轮/按键)");
     }
 
@@ -482,6 +488,7 @@ public partial class MainWindow : Window
     {
         _autoTrigger?.Dispose();
         _autoTrigger = null;
+        _widget?.SetAutoState(false);
         Log("自动触发已关闭");
     }
 
@@ -491,6 +498,7 @@ public partial class MainWindow : Window
         if (LangBox.SelectedItem is ComboBoxItem item && item.Tag is string lang)
         {
             _targetLang = lang;
+            _widget?.SetLangLabel(lang);
             Log($"目标语言:{lang}");
         }
     }
@@ -502,6 +510,7 @@ public partial class MainWindow : Window
             _renderStyle = style == "Background"
                 ? OcrOverlayRenderer.RenderStyle.Background
                 : OcrOverlayRenderer.RenderStyle.Subtitle;
+            _widget?.SetStyleLabel(_renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle);
             Log($"渲染方式:{( _renderStyle == OcrOverlayRenderer.RenderStyle.Subtitle ? "字幕底块" : "背景采样")}");
         }
     }
