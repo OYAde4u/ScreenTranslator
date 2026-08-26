@@ -1,6 +1,8 @@
 # ===== 构建输出 =====
 bin/
 obj/
+publish/
+installer/
 *.user
 
 # ===== 本机 dotnet/NuGet 状态(离线依赖缓存,不提交) =====

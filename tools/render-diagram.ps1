@@ -1,4 +1,4 @@
-﻿# 生成《屏幕实时翻译软件》架构图 PNG(2x 高清)
+# 生成《屏幕实时翻译软件》架构图 PNG(2x 高清)
 # 用法: pwsh -File render-diagram.ps1
 Add-Type -AssemblyName System.Drawing
 
@@ -202,7 +202,7 @@ foreach ($lg in $legend) {
     Draw-Text $g $lg.t ($x + 26) 706 11 '#445566'
 }
 
-$out = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'architecture-diagram.png'
+$out = Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) 'architecture-diagram.png'
 $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $bmp.Dispose()
 Write-Host "saved: $out"

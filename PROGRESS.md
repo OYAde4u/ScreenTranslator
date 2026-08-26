@@ -75,9 +75,9 @@
 
 ## 项目状态:✅ 可运行,主引擎 = RapidOCR(PP-OCRv6 small 多语,整屏高质量)+ Windows.Media.Ocr 兜底(HybridOcrEngine 调度)
 - 源码:`D:\ScreenTranslator\ScreenTranslator\`(WPF,.NET 8 `net8.0-windows10.0.19041.0`)
-- 构建:`pwsh -c "& 'D:\ScreenTranslator\dot.ps1' build"`(workdir = 项目目录;沙箱内脚本调用受限时改用内联环境变量执行 dotnet build)
-- 输出:`bin\Debug\net8.0-windows10.0.19041.0\ScreenTranslator.exe`(注意 TFM 全名目录)
-- NuGet:华为云 **http** artifactory 源;`install-nupkg.ps1` 手动装包(沙箱 https 被拦截,restore 解析依赖时仍会尝试 https 资源 URL,所以所有依赖包须预先手动装进 `D:\ScreenTranslator\.nuget\packages`)
+- 构建:`pwsh -c "& 'D:\ScreenTranslator\tools\dot.ps1' build"`(workdir = 项目目录;沙箱内脚本调用受限时改用内联环境变量执行 dotnet build)
+- 输出:调试 `bin\Debug\net8.0-windows10.0.19041.0\ScreenTranslator.exe`(注意 TFM 全名目录);发布 `publish\ScreenTranslator.exe`(自包含 win-x64,浅层)
+- NuGet:华为云 **http** artifactory 源;`tools\install-nupkg.ps1` 手动装包(沙箱 https 被拦截,restore 解析依赖时仍会尝试 https 资源 URL,所以所有依赖包须预先手动装进 `D:\ScreenTranslator\.nuget\packages`)
 
 ## 已完成 ✅
 - **M1 骨架**:BitBlt 截图(2560x1600 物理像素)、置顶透明穿透覆盖窗、Ctrl+Shift+T 热键、DPI 坐标系统一
@@ -105,7 +105,7 @@
 ## 关键文件
 - `Services\`:DisplayLayout / ScreenCaptureService / OverlayManager / OverlayWindow / Ocr\(WindowsOcrEngine, PaddleOcrEngine, OcrLineFilter) / OcrOverlayRenderer / Translate\(DeepLX, TranslationPipeline) / InputHookService / AutoTriggerService / ScreenDiff
 - `App.xaml.cs`(自检+DPI+异常落盘)、`MainWindow.xaml(.cs)`(控制面板,引擎择优)
-- 工具:`dot.ps1`(构建环境重定向)、`install-nupkg.ps1`(离线装包)、`NuGet.Config`(http 源)
+- 工具:`tools\dot.ps1`(构建环境重定向)、`tools\install-nupkg.ps1`(离线装包)、`NuGet.Config`(http 源)
 
 ## 环境备忘
 - dotnet 8.0.413;沙箱只通 HTTP(HTTPS 拦截);读文件用 read,写用 write/edit

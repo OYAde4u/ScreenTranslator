@@ -46,13 +46,13 @@
 
 ```powershell
 # 一键构建(输出 bin\Debug\net8.0-windows10.0.19041.0\ScreenTranslator.exe)
-.\dot.ps1 build
+.\tools\dot.ps1 build
 
 # 或直接使用 dotnet
 dotnet build ScreenTranslator\ScreenTranslator.csproj
 ```
 
-> 依赖 NuGet 包(PaddleOCRSharp 等)需可访问 NuGet 源;若处于离线/受限网络环境,可用 `install-nupkg.ps1` 预先手动安装到本地包缓存。
+> 依赖 NuGet 包(PaddleOCRSharp 等)需可访问 NuGet 源;若处于离线/受限网络环境,可用 `tools\install-nupkg.ps1` 预先手动安装到本地包缓存。
 
 ### 运行
 
@@ -104,9 +104,8 @@ ScreenTranslator/
 │       ├── OverlayManager.cs / OverlayWindow.cs / OcrOverlayRenderer.cs  # 透明覆盖层渲染
 │       ├── AutoTriggerService.cs / HotKeyService.cs / InputHookService.cs # 自动触发与热键
 │       └── DisplayLayout.cs / FrameOps.cs / PixelFrame.cs / Diag.cs       # 工具与日志
-├── dot.ps1                        # 一键构建脚本
-├── install-nupkg.ps1              # 离线 NuGet 包安装助手
-├── 架构图.md / architecture-diagram.png  # 零基础架构图(由 render-diagram.ps1 生成)
+├── tools/                         # 开发脚本:dot.ps1(一键构建)、install-nupkg.ps1(离线装包)、render/check-diagram.ps1(架构图)
+├── 架构图.md / architecture-diagram.png  # 零基础架构图(由 tools\render-diagram.ps1 生成)
 ├── architecture.md                # 架构设计文档
 └── PROGRESS.md / REVIEW.md        # 开发进度与代码审查记录
 ```
