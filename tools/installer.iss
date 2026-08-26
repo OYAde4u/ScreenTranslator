@@ -1,12 +1,12 @@
 ; =============================================================
 ; 屏幕实时翻译 ScreenTranslator 安装包脚本(Inno Setup 6)
 ; 编译: .tools\InnoSetup\ISCC.exe tools\installer.iss
-; 产物: installer\ScreenTranslator-Setup-1.0.0.exe
+; 产物: installer\ScreenTranslator-Setup-1.1.0.exe
 ; 说明: 自包含发布(无需 .NET 运行时);排除 Paddle 诊断运行时
 ;       (paddle_inference/mklml/mkldnn/opencv/paddle_yt_phi ≈308MB
 ;        + inference\ ≈79MB,Paddle 仅为开发诊断,正式版用 RapidOCR)
 ; =============================================================
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "OYAde4u"
 #define MyAppURL "https://github.com/OYAde4u/ScreenTranslator"
 #define PublishDir "D:\ScreenTranslator\publish"
