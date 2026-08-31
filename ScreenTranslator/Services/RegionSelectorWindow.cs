@@ -21,6 +21,7 @@ public sealed class RegionSelectorWindow : Window
 
     private readonly Border _band;
     private readonly Border _hint;
+    private readonly double _scale; // 系统 DPI 缩放(125% → 1.25)
     private Point _start;
     private bool _dragging;
 
@@ -31,6 +32,13 @@ public sealed class RegionSelectorWindow : Window
         var snap = ScreenCaptureService.CaptureSnapshot();
         var frame = snap.Frame;
 
+        // 进程 system-DPI-aware:WPF 按 96DPI 布局,OS 把整窗位图拉伸 scale 倍——
+        // 所以窗口/画布尺寸必须用 DIP(物理÷scale),否则窗口被放大裁切(曾导致"画面放大至右上角"bug);
+        // 鼠标坐标同样是 DIP,上报选区时乘回 scale 得到物理像素
+        _scale = DisplayLayout.SystemScale;
+        var dipW = frame.Width / _scale;
+        var dipH = frame.Height / _scale;
+
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
         ShowInTaskbar = false;
@@ -38,19 +46,18 @@ public sealed class RegionSelectorWindow : Window
         Background = Brushes.Black;
         Cursor = Cursors.Cross;
         Focusable = true;
-        // 进程 system-DPI-aware,WPF 按 96DPI 处理:1 DIP = 1 物理像素,窗口尺寸直接用物理值
-        Left = DisplayLayout.VirtualScreen.Left;
-        Top = DisplayLayout.VirtualScreen.Top;
-        Width = frame.Width;
-        Height = frame.Height;
+        Left = DisplayLayout.VirtualScreen.Left / _scale;
+        Top = DisplayLayout.VirtualScreen.Top / _scale;
+        Width = dipW;
+        Height = dipH;
 
-        var canvas = new Canvas { Width = frame.Width, Height = frame.Height };
+        var canvas = new Canvas { Width = dipW, Height = dipH };
         canvas.Children.Add(new Image
         {
             Source = frame.Source,
-            Width = frame.Width,
-            Height = frame.Height,
-            Stretch = Stretch.Fill,
+            Width = dipW,
+            Height = dipH,
+            Stretch = Stretch.Fill, // 物理帧 → DIP 画布:WPF 高质量缩放,1:1 对上屏像素
         });
 
         // 高亮框:元素级半透明填充(子元素 alpha 由 WPF 内部合成,不受窗口合成问题影响)
@@ -79,8 +86,8 @@ public sealed class RegionSelectorWindow : Window
             },
         };
         _hint.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        Canvas.SetLeft(_hint, (frame.Width - _hint.DesiredSize.Width) / 2);
-        Canvas.SetTop(_hint, frame.Height * 0.3);
+        Canvas.SetLeft(_hint, (dipW - _hint.DesiredSize.Width) / 2);
+        Canvas.SetTop(_hint, dipH * 0.3);
         canvas.Children.Add(_hint);
 
         Content = canvas;
@@ -126,11 +133,12 @@ public sealed class RegionSelectorWindow : Window
         _dragging = false;
         ReleaseMouseCapture();
         var p = e.GetPosition(this);
+        // DIP → 物理像素虚拟屏坐标(窗口 Left/Top 是 DIP,乘回 scale)
         var rect = new Rect(
-            Left + Math.Min(_start.X, p.X),
-            Top + Math.Min(_start.Y, p.Y),
-            Math.Abs(p.X - _start.X),
-            Math.Abs(p.Y - _start.Y));
+            (Left + Math.Min(_start.X, p.X)) * _scale,
+            (Top + Math.Min(_start.Y, p.Y)) * _scale,
+            Math.Abs(p.X - _start.X) * _scale,
+            Math.Abs(p.Y - _start.Y) * _scale);
         if (rect.Width >= 16 && rect.Height >= 16)
             RegionSelected?.Invoke(rect);
         Close();
