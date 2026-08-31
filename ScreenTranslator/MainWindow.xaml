@@ -10,6 +10,8 @@
         <Button x:Name="BtnTest" Margin="0,12,0,0" Padding="8,4" Content="测试:截图 + 识别 + 覆盖" Click="OnTestClick"/>
         <Button x:Name="BtnDemo" Margin="0,8,0,0" Padding="8,4" Content="演示:英文测试页 + 自动翻译(先看效果)" Click="OnDemoClick"/>
         <Button x:Name="BtnClear" Margin="0,8,0,0" Padding="8,4" Content="清除覆盖层" Click="OnClearClick"/>
+        <Button x:Name="BtnSelectRegion" Margin="0,8,0,0" Padding="8,4"
+                Content="框选区域:只识别所选区域,译文显示在悬浮框(galgame 对话框模式)" Click="OnSelectRegionClick"/>
         <CheckBox x:Name="ChkAuto" Margin="0,10,0,0" Content="自动触发(点击/滚轮/按键,防抖 300ms,只翻变化区域)"
                   Checked="OnAutoChecked" Unchecked="OnAutoUnchecked"/>
         <CheckBox x:Name="ChkSaveShot" Margin="0,6,0,0" Content="保存调试截图(每帧全屏 PNG,慢,默认关)"

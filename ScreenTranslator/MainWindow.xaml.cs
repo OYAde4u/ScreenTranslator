@@ -33,9 +33,12 @@ public partial class MainWindow : Window
     private bool _pending;
 
     // 上一轮 OCR 的区域指纹与结果:区域像素未变时整段复用(静态页面反复触发零推理开销)
-    private (int Y, int H)? _lastBandRect;
+    private (int X, int Y, int W, int H)? _lastBandRect;
     private long _lastBandHash;
     private List<OcrLine>? _lastBandLines;
+
+    // 框选识别区域(物理像素,帧坐标):非 null 时只识别该区域,译文显示在悬浮框,不画屏幕覆盖层
+    private (int X, int Y, int W, int H)? _region;
 
     /// <summary>截图前隐藏覆盖层后,等待合成器将其移出画面的时间。</summary>
     private const int OverlayHideDelayMs = 35;
@@ -89,10 +92,16 @@ public partial class MainWindow : Window
         _widget = new StatusWidgetWindow();
         _widget.SetLangLabel(_targetLang);
         _widget.SetAutoState(ChkAuto.IsChecked == true);
+        _widget.SetRegionState(false);
         _widget.SetStatus("空闲");
         _widget.LangCycleRequested += () =>
             LangBox.SelectedIndex = (LangBox.SelectedIndex + 1) % LangBox.Items.Count;
         _widget.TriggerRequested += () => TranslateOnce();
+        _widget.RegionButtonRequested += () =>
+        {
+            if (_region is not null) ClearRegion();
+            else OpenRegionSelector();
+        };
         _widget.AutoToggleRequested += () =>
             ChkAuto.IsChecked = !(ChkAuto.IsChecked == true);
         _widget.HideRequested += () => ChkWidget.IsChecked = false;
@@ -202,31 +211,39 @@ public partial class MainWindow : Window
             frame = snap.Frame;
             Log($"截图 {frame.Width}x{frame.Height},识别…");
 
-            var dirty = await Task.Run(() =>
+            // 3) OCR 范围:选区模式直接用框选区域(跳过脏区 diff);否则脏区决定(无变化跳过;小区域只裁剪识别)
+            List<(int, int, int, int)> regions;
+            var fullFrame = false;
+            if (_region is { } rg)
             {
-                var fps = ScreenDiff.Fingerprint(frame);
-                var rects = ScreenDiff.DirtyRects(_prevFingerprints, fps);
-                _prevFingerprints = fps.ToDictionary(f => (f.X, f.Y), f => f.Hash);
-                return rects;
-            });
-            Log($"变化 {dirty.Count} 区");
-
-            // 3) 脏区决定 OCR 范围:无变化跳过;小区域只裁剪识别(全屏 OCR 是最重的一步)
-            var regions = BuildOcrRegions(dirty, ExcludeRects(), frame.Width, frame.Height, out var fullFrame);
-            if (regions.Count == 0)
+                regions = new List<(int, int, int, int)> { rg };
+            }
+            else
             {
-                Log("无有效变化,跳过识别");
-                _widget?.SetStatus("无变化");
-                return;
+                var dirty = await Task.Run(() =>
+                {
+                    var fps = ScreenDiff.Fingerprint(frame);
+                    var rects = ScreenDiff.DirtyRects(_prevFingerprints, fps);
+                    _prevFingerprints = fps.ToDictionary(f => (f.X, f.Y), f => f.Hash);
+                    return rects;
+                });
+                Log($"变化 {dirty.Count} 区");
+                regions = BuildOcrRegions(dirty, ExcludeRects(), frame.Width, frame.Height, out fullFrame);
+                if (regions.Count == 0)
+                {
+                    Log("无有效变化,跳过识别");
+                    _widget?.SetStatus("无变化");
+                    return;
+                }
             }
             _widget?.SetStatus($"识别中({(fullFrame ? "全屏" : "横带")})…");
 
             var lines = new List<OcrLine>();
             foreach (var (rx, ry, rw, rh) in regions)
             {
-                // 区域像素指纹复用:横带内容逐字节采样比对,未变则跳过重推理(几 ms vs 数百 ms~数 s)
-                var bandHash = HashRegion(frame, ry, rh);
-                if (regions.Count == 1 && _lastBandRect == (ry, rh) && _lastBandHash == bandHash
+                // 区域像素指纹复用:内容采样比对,未变则跳过重推理(几 ms vs 数百 ms~数 s)
+                var bandHash = HashRegion(frame, rx, ry, rw, rh);
+                if (regions.Count == 1 && _lastBandRect == (rx, ry, rw, rh) && _lastBandHash == bandHash
                     && _lastBandLines is not null)
                 {
                     lines.AddRange(_lastBandLines);
@@ -247,7 +264,7 @@ public partial class MainWindow : Window
 
                 if (regions.Count == 1)
                 {
-                    _lastBandRect = (ry, rh);
+                    _lastBandRect = (rx, ry, rw, rh);
                     _lastBandHash = bandHash;
                     _lastBandLines = new List<OcrLine>(lines);
                 }
@@ -267,6 +284,7 @@ public partial class MainWindow : Window
             if (filtered.Count == 0)
             {
                 _overlay.Clear();
+                if (_region is not null) _widget?.SetTranslation(null);
                 Log(lines.Count == 0
                     ? "未识别到文字:请确认屏幕上有文字内容(全屏 OCR 需几秒,请稍候)"
                     : $"识别 {lines.Count} 行但均无需翻译(多为已是目标语言):屏幕上需要有外文内容才会出现覆盖块,或切换目标语言试试");
@@ -289,12 +307,23 @@ public partial class MainWindow : Window
             if (pairs.Count == 0)
             {
                 _overlay.Clear();
+                if (_region is not null) _widget?.SetTranslation(null);
                 Log("翻译服务不可用(DeepLX/Edge/MyMemory 均失败),未覆盖原文——请检查网络后重试");
                 _widget?.SetStatus("翻译服务不可用");
                 return;
             }
             if (pairs.Count < filtered.Count)
                 Log($"提示:{filtered.Count - pairs.Count} 行未翻出(保留原文不覆盖)");
+
+            // 选区模式(galgame 对话框):译文显示在悬浮框,不在游戏画面上画覆盖层
+            if (_region is not null)
+            {
+                var joined = string.Join("\n", pairs.Select(p => p.Second));
+                _widget?.SetTranslation(joined);
+                Log($"选区翻译完成:{pairs.Count} 块 · {sw.Elapsed.TotalSeconds:0.0}s · {_pipeline.LastEngineName ?? "缓存"}(译文→悬浮框)");
+                _widget?.SetStatus($"完成 {pairs.Count} 块 · {sw.Elapsed.TotalSeconds:0.0}s · {_pipeline.LastEngineName ?? "缓存"}");
+                return;
+            }
 
             var items = await Task.Run(() =>
                 pairs
@@ -443,21 +472,24 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// OCR 区域像素指纹(FNV-1a 采样,约 16K 采样点,个位数 ms):
-    /// 用于"横带内容未变则复用上轮识别结果"。采样密度足够区分文本变化,理论碰撞风险可忽略。
+    /// OCR 区域像素指纹(FNV-1a 网格采样,约 8K 采样点,个位数 ms):
+    /// 用于"区域内容未变则复用上轮识别结果"。采样密度足够区分文本变化,理论碰撞风险可忽略。
     /// </summary>
-    private static long HashRegion(PixelFrame f, int y0, int h)
+    private static long HashRegion(PixelFrame f, int x0, int y0, int w, int h)
     {
         unchecked
         {
-            var start = y0 * f.Width * 4;
-            var len = h * f.Width * 4;
-            var step = Math.Max(64, len / 16384);
+            var yStep = Math.Max(1, h / 64);
+            var xStep = Math.Max(1, w / 128);
             long hash = -3750763034362895579; // FNV offset basis
-            for (var i = start; i < start + len; i += step)
+            for (var y = y0; y < y0 + h; y += yStep)
             {
-                hash ^= f.Pixels[i];
-                hash *= 1099511628211; // FNV prime
+                var row = (y * f.Width + x0) * 4;
+                for (var x = 0; x < w; x += xStep)
+                {
+                    hash ^= f.Pixels[row + x * 4];
+                    hash *= 1099511628211; // FNV prime
+                }
             }
             return hash;
         }
@@ -477,6 +509,54 @@ public partial class MainWindow : Window
 
     /// <summary>公开触发一次翻译(自检/自动化用)。</summary>
     public void TriggerTranslate() => TranslateOnce();
+
+    /// <summary>「框选区域」:拖出一块屏幕区域,之后只识别该区域,译文显示在悬浮框(galgame 对话框模式)。</summary>
+    private void OnSelectRegionClick(object sender, RoutedEventArgs e) => OpenRegionSelector();
+
+    private void OpenRegionSelector()
+    {
+        Log("框选模式:按住左键拖出要识别的区域(如游戏对话框),Esc/右键取消");
+        var sel = new RegionSelectorWindow();
+        sel.RegionSelected += dipRect =>
+        {
+            // DIP 虚拟屏坐标 → 物理帧坐标:按选区中心定位显示器,乘其 DPI 缩放。
+            // 单显示器/主屏场景精确;多显示器异 DPI 边缘情况 TODO: 需要时再做逐边精确映射
+            var cx = dipRect.X + dipRect.Width / 2;
+            var cy = dipRect.Y + dipRect.Height / 2;
+            var mon = DisplayLayout.Monitors.FirstOrDefault(m =>
+                cx >= m.Left / m.Scale && cx < (m.Left + m.Width) / m.Scale
+                && cy >= m.Top / m.Scale && cy < (m.Top + m.Height) / m.Scale);
+            if (mon is null || mon.Width == 0)
+            {
+                Log("选区失败:未定位到显示器");
+                return;
+            }
+            var x = Math.Clamp((int)((dipRect.X - mon.Left / mon.Scale) * mon.Scale), 0, mon.Width - 1);
+            var y = Math.Clamp((int)((dipRect.Y - mon.Top / mon.Scale) * mon.Scale), 0, mon.Height - 1);
+            var w = Math.Clamp((int)(dipRect.Width * mon.Scale), 1, mon.Width - x);
+            var h = Math.Clamp((int)(dipRect.Height * mon.Scale), 1, mon.Height - y);
+            _region = (x, y, w, h);
+            _lastBandRect = null;
+            _lastBandLines = null;
+            _overlay.Clear();
+            _widget?.SetRegionState(true);
+            _widget?.SetTranslation(null);
+            Log($"框选区域:{w}x{h} @ ({x},{y})——只识别该区域,译文显示在悬浮框");
+            TranslateOnce(); // 立刻翻一次,即时反馈
+        };
+        sel.Show();
+        sel.Activate();
+    }
+
+    private void ClearRegion()
+    {
+        _region = null;
+        _lastBandRect = null;
+        _lastBandLines = null;
+        _widget?.SetRegionState(false);
+        _widget?.SetTranslation(null);
+        Log("已清除框选区域,恢复全屏脏区识别");
+    }
 
     /// <summary>演示:弹出一个英文测试页窗口,稍后自动触发翻译,立刻看到悬浮覆盖效果。</summary>
     private void OnDemoClick(object sender, RoutedEventArgs e)

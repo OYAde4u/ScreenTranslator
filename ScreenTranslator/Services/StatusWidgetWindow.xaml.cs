@@ -15,6 +15,9 @@ public sealed partial class StatusWidgetWindow : Window
     /// <summary>点击"▶"按钮(立即翻译一次)。</summary>
     public event Action? TriggerRequested;
 
+    /// <summary>点击"选区/清选"按钮(进入框选,或清除已有选区)。</summary>
+    public event Action? RegionButtonRequested;
+
     /// <summary>点击"自动"按钮(开关自动触发)。</summary>
     public event Action? AutoToggleRequested;
 
@@ -60,6 +63,29 @@ public sealed partial class StatusWidgetWindow : Window
                  : System.Windows.Media.Color.FromRgb(0x4A, 0x4A, 0x4F));
     }
 
+    /// <summary>更新选区按钮文字(已选区显示"清选")。</summary>
+    public void SetRegionState(bool hasRegion)
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(() => SetRegionState(hasRegion)); return; }
+        BtnRegion.Content = hasRegion ? "清选" : "选区";
+    }
+
+    /// <summary>设置选区模式译文(null/空 = 收起面板,窗口自动缩回单行)。</summary>
+    public void SetTranslation(string? text)
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(() => SetTranslation(text)); return; }
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            TranslationPanel.Visibility = Visibility.Collapsed;
+            TranslationText.Text = "";
+        }
+        else
+        {
+            TranslationText.Text = text;
+            TranslationPanel.Visibility = Visibility.Visible;
+        }
+    }
+
     private void OnDragStart(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState == MouseButtonState.Pressed) DragMove();
@@ -68,6 +94,8 @@ public sealed partial class StatusWidgetWindow : Window
     private void OnLangClick(object sender, RoutedEventArgs e) => LangCycleRequested?.Invoke();
 
     private void OnTriggerClick(object sender, RoutedEventArgs e) => TriggerRequested?.Invoke();
+
+    private void OnRegionClick(object sender, RoutedEventArgs e) => RegionButtonRequested?.Invoke();
 
     private void OnAutoClick(object sender, RoutedEventArgs e) => AutoToggleRequested?.Invoke();
 

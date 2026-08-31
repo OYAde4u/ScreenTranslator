@@ -1,37 +1,56 @@
 <Window x:Class="ScreenTranslator.Services.StatusWidgetWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="翻译状态" Width="360" Height="48"
+        Title="翻译状态" Width="400" Height="48" MaxHeight="420"
+        SizeToContent="Height"
         WindowStyle="None" ResizeMode="NoResize" Topmost="True" ShowInTaskbar="False"
         AllowsTransparency="False" Opacity="0.92" Background="#2D2D30"
         WindowStartupLocation="Manual">
     <!--
-      灰色半透明小悬浮框:游戏时查看翻译进度 + 切换模式。
+      灰色半透明小悬浮框:游戏时查看翻译进度 + 快捷操作。
+      选区模式下第二行展开译文面板(高度自适应,最长 280 滚动)。
       注意:不能用 AllowsTransparency(本机实测分层窗口不合成上屏),用 Opacity(恒定透明度)实现半透明;
       窗口区域会被加入 OCR/覆盖层排除列表,避免"识别自身"。
     -->
     <Border CornerRadius="8" Background="#2D2D30" Padding="10,5" MouseLeftButtonDown="OnDragStart">
         <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock x:Name="StatusText" Foreground="#EEEEEE" FontSize="11"
-                       VerticalAlignment="Center" Text="空闲" TextTrimming="CharacterEllipsis"/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button x:Name="BtnTrigger" Content="▶" FontSize="11" Padding="7,2" Margin="4,0,0,0"
-                        Background="#4A4A4F" Foreground="White" BorderThickness="0"
-                        ToolTip="立即翻译一次(等同 Ctrl+Shift+T)" Click="OnTriggerClick"/>
-                <Button x:Name="BtnAuto" Content="自动" FontSize="11" Padding="7,2" Margin="4,0,0,0"
-                        Background="#4A4A4F" Foreground="White" BorderThickness="0"
-                        ToolTip="开关自动触发(点击/滚轮/按键后自动翻译)" Click="OnAutoClick"/>
-                <Button x:Name="BtnLang" Content="→中" FontSize="11" Padding="7,2" Margin="4,0,0,0"
-                        Background="#4A4A4F" Foreground="White" BorderThickness="0"
-                        ToolTip="切换目标语言:中 → 英 → 日" Click="OnLangClick"/>
-                <Button x:Name="BtnHide" Content="×" FontSize="11" Padding="7,2" Margin="4,0,0,0"
-                        Background="#4A4A4F" Foreground="#AAA" BorderThickness="0"
-                        ToolTip="隐藏悬浮框(主窗口可重新打开)" Click="OnHideClick"/>
-            </StackPanel>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="StatusText" Foreground="#EEEEEE" FontSize="11"
+                           VerticalAlignment="Center" Text="空闲" TextTrimming="CharacterEllipsis"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="BtnTrigger" Content="▶" FontSize="11" Padding="7,2" Margin="4,0,0,0"
+                            Background="#4A4A4F" Foreground="White" BorderThickness="0"
+                            ToolTip="立即翻译一次(等同 Ctrl+Shift+T)" Click="OnTriggerClick"/>
+                    <Button x:Name="BtnRegion" Content="选区" FontSize="11" Padding="7,2" Margin="4,0,0,0"
+                            Background="#4A4A4F" Foreground="White" BorderThickness="0"
+                            ToolTip="框选一块屏幕区域:只识别该区域,译文显示在本悬浮框(galgame 对话框模式);已选区时点击=清除选区" Click="OnRegionClick"/>
+                    <Button x:Name="BtnAuto" Content="自动" FontSize="11" Padding="7,2" Margin="4,0,0,0"
+                            Background="#4A4A4F" Foreground="White" BorderThickness="0"
+                            ToolTip="开关自动触发(点击/滚轮/按键后自动翻译)" Click="OnAutoClick"/>
+                    <Button x:Name="BtnLang" Content="→中" FontSize="11" Padding="7,2" Margin="4,0,0,0"
+                            Background="#4A4A4F" Foreground="White" BorderThickness="0"
+                            ToolTip="切换目标语言:中 → 英 → 日" Click="OnLangClick"/>
+                    <Button x:Name="BtnHide" Content="×" FontSize="11" Padding="7,2" Margin="4,0,0,0"
+                            Background="#4A4A4F" Foreground="#AAA" BorderThickness="0"
+                            ToolTip="隐藏悬浮框(主窗口可重新打开)" Click="OnHideClick"/>
+                </StackPanel>
+            </Grid>
+            <!-- 选区模式译文面板:有译文时展开 -->
+            <Border x:Name="TranslationPanel" Grid.Row="1" Margin="0,6,0,3" CornerRadius="4"
+                    Background="#3A3A3F" Visibility="Collapsed">
+                <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto">
+                    <TextBlock x:Name="TranslationText" Foreground="#F5F5F5" FontSize="13"
+                               TextWrapping="Wrap" Margin="8,6" MouseLeftButtonDown="OnDragStart"/>
+                </ScrollViewer>
+            </Border>
         </Grid>
     </Border>
 </Window>
