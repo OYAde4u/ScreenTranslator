@@ -517,24 +517,14 @@ public partial class MainWindow : Window
     {
         Log("框选模式:按住左键拖出要识别的区域(如游戏对话框),Esc/右键取消");
         var sel = new RegionSelectorWindow();
-        sel.RegionSelected += dipRect =>
+        sel.RegionSelected += physRect =>
         {
-            // DIP 虚拟屏坐标 → 物理帧坐标:按选区中心定位显示器,乘其 DPI 缩放。
-            // 单显示器/主屏场景精确;多显示器异 DPI 边缘情况 TODO: 需要时再做逐边精确映射
-            var cx = dipRect.X + dipRect.Width / 2;
-            var cy = dipRect.Y + dipRect.Height / 2;
-            var mon = DisplayLayout.Monitors.FirstOrDefault(m =>
-                cx >= m.Left / m.Scale && cx < (m.Left + m.Width) / m.Scale
-                && cy >= m.Top / m.Scale && cy < (m.Top + m.Height) / m.Scale);
-            if (mon is null || mon.Width == 0)
-            {
-                Log("选区失败:未定位到显示器");
-                return;
-            }
-            var x = Math.Clamp((int)((dipRect.X - mon.Left / mon.Scale) * mon.Scale), 0, mon.Width - 1);
-            var y = Math.Clamp((int)((dipRect.Y - mon.Top / mon.Scale) * mon.Scale), 0, mon.Height - 1);
-            var w = Math.Clamp((int)(dipRect.Width * mon.Scale), 1, mon.Width - x);
-            var h = Math.Clamp((int)(dipRect.Height * mon.Scale), 1, mon.Height - y);
+            // 选区上报的是物理像素虚拟屏坐标;主流程帧 = 同坐标系的虚拟屏快照,直接减原点即可
+            // (快照式框选天然规避了 DIP/多屏异 DPI 换算,无需再按显示器缩放)
+            var x = Math.Clamp((int)(physRect.X - DisplayLayout.VirtualScreen.Left), 0, (int)DisplayLayout.VirtualScreen.Width - 1);
+            var y = Math.Clamp((int)(physRect.Y - DisplayLayout.VirtualScreen.Top), 0, (int)DisplayLayout.VirtualScreen.Height - 1);
+            var w = Math.Clamp((int)physRect.Width, 1, (int)DisplayLayout.VirtualScreen.Width - x);
+            var h = Math.Clamp((int)physRect.Height, 1, (int)DisplayLayout.VirtualScreen.Height - y);
             _region = (x, y, w, h);
             _lastBandRect = null;
             _lastBandLines = null;

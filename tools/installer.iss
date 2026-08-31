@@ -6,7 +6,7 @@
 ;       (paddle_inference/mklml/mkldnn/opencv/paddle_yt_phi ≈308MB
 ;        + inference\ ≈79MB,Paddle 仅为开发诊断,正式版用 RapidOCR)
 ; =============================================================
-#define MyAppVersion "1.4.0"
+#define MyAppVersion "1.4.1"
 #define MyAppPublisher "OYAde4u"
 #define MyAppURL "https://github.com/OYAde4u/ScreenTranslator"
 #define PublishDir "D:\ScreenTranslator\publish"
